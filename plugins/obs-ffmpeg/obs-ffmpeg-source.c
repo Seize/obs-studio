@@ -57,6 +57,10 @@ struct ffmpeg_source {
 	bool restart_on_activate;
 	bool close_when_inactive;
 	bool seekable;
+
+	pthread_mutex_t mutex;
+	struct timespec last_a;
+	struct timespec last_v;
 };
 
 static bool is_local_file_modified(obs_properties_t *props,
@@ -219,12 +223,18 @@ static void dump_source_info(struct ffmpeg_source *s, const char *input,
 static void get_frame(void *opaque, struct obs_source_frame *f)
 {
 	struct ffmpeg_source *s = opaque;
+	pthread_mutex_lock(&s->mutex);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
+	pthread_mutex_unlock(&s->mutex);
 	obs_source_output_video(s->source, f);
 }
 
 static void preload_frame(void *opaque, struct obs_source_frame *f)
 {
 	struct ffmpeg_source *s = opaque;
+	pthread_mutex_lock(&s->mutex);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
+	pthread_mutex_unlock(&s->mutex);
 	if (s->close_when_inactive)
 		return;
 
@@ -235,6 +245,9 @@ static void preload_frame(void *opaque, struct obs_source_frame *f)
 static void get_audio(void *opaque, struct obs_source_audio *a)
 {
 	struct ffmpeg_source *s = opaque;
+	pthread_mutex_lock(&s->mutex);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a);
+	pthread_mutex_unlock(&s->mutex);
 	obs_source_output_audio(s->source, a);
 }
 
@@ -273,8 +286,30 @@ static void ffmpeg_source_open(struct ffmpeg_source *s)
 static void ffmpeg_source_tick(void *data, float seconds)
 {
 	UNUSED_PARAMETER(seconds);
+	uint64_t delta_us;
+	struct timespec curr_time;
+	struct timespec last_v;
+	struct timespec last_a;
 
 	struct ffmpeg_source *s = data;
+
+	clock_gettime(CLOCK_MONOTONIC_RAW, &curr_time);
+
+	pthread_mutex_lock(&s->mutex);
+	last_v = s->last_v;
+	last_a = s->last_a;
+	pthread_mutex_unlock(&s->mutex);
+
+	delta_us = (curr_time.tv_sec - last_v.tv_sec) * 1000000 + (curr_time.tv_nsec - last_v.tv_nsec) / 1000;
+	if(s->media.v.decoder && delta_us > 1000000) {
+		// printf("video stream timeout\n");
+	}
+
+	delta_us = (curr_time.tv_sec - last_a.tv_sec) * 1000000 + (curr_time.tv_nsec - last_a.tv_nsec) / 1000;
+	if(s->media.a.decoder && delta_us > 1000000) {
+		// printf("audio stream timeout\n");
+	}
+
 	if (s->destroy_media) {
 		if (s->media_valid) {
 			mp_media_free(&s->media);
@@ -448,6 +483,9 @@ static void *ffmpeg_source_create(obs_data_t *settings, obs_source_t *source)
 			get_duration, s);
 	proc_handler_add(ph, "void get_nb_frames(out int num_frames)",
 			get_nb_frames, s);
+	pthread_mutex_init_value(&s->mutex);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a);
 
 	ffmpeg_source_update(s, settings);
 	return s;
@@ -467,6 +505,7 @@ static void ffmpeg_source_destroy(void *data)
 	bfree(s->sws_data);
 	bfree(s->input);
 	bfree(s->input_format);
+	pthread_mutex_destroy(&s->mutex);
 	bfree(s);
 }
 
