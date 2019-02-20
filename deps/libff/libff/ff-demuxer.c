@@ -166,6 +166,7 @@ AVHWAccel *find_hwaccel_codec(AVCodecContext *codec_context)
 	while ((hwaccel = av_hwaccel_next(hwaccel)) != NULL) {
 		if (hwaccel->id == codec_context->codec_id &&
 		    (hwaccel->pix_fmt == AV_PIX_FMT_VDA_VLD   ||
+		     hwaccel->pix_fmt == AV_PIX_FMT_CUDA ||
 		     hwaccel->pix_fmt == AV_PIX_FMT_DXVA2_VLD ||
 		     hwaccel->pix_fmt == AV_PIX_FMT_VAAPI_VLD)) {
 			return hwaccel;
