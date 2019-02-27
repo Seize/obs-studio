@@ -31,6 +31,15 @@
 #define FF_BLOG(level, format, ...) \
 	FF_LOG_S(s->source, level, format, ##__VA_ARGS__)
 
+#define PRINT_DEBUG(fmt, args...) {\
+	if(Debug) { \
+		printf(fmt "\n", ##args); \
+	} \
+}
+
+
+bool Debug = false;
+
 struct ffmpeg_source {
 	mp_media_t media;
 	bool media_valid;
@@ -226,6 +235,7 @@ static void get_frame(void *opaque, struct obs_source_frame *f)
 	pthread_mutex_lock(&s->mutex);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
 	pthread_mutex_unlock(&s->mutex);
+	PRINT_DEBUG("get_frame. %d x %d", f->width, f->height);
 	obs_source_output_video(s->source, f);
 }
 
@@ -235,6 +245,7 @@ static void preload_frame(void *opaque, struct obs_source_frame *f)
 	pthread_mutex_lock(&s->mutex);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
 	pthread_mutex_unlock(&s->mutex);
+	PRINT_DEBUG("preload_frame");
 	if (s->close_when_inactive)
 		return;
 
@@ -248,11 +259,13 @@ static void get_audio(void *opaque, struct obs_source_audio *a)
 	pthread_mutex_lock(&s->mutex);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a);
 	pthread_mutex_unlock(&s->mutex);
+	PRINT_DEBUG("get_audio");
 	obs_source_output_audio(s->source, a);
 }
 
 static void media_stopped(void *opaque)
 {
+	PRINT_DEBUG("media_stopped");
 	struct ffmpeg_source *s = opaque;
 	if (s->is_clear_on_media_end) {
 		obs_source_output_video(s->source, NULL);
@@ -263,6 +276,7 @@ static void media_stopped(void *opaque)
 
 static void ffmpeg_source_open(struct ffmpeg_source *s)
 {
+	PRINT_DEBUG("ffmpeg_source_open");
 	if (s->input && *s->input) {
 		struct mp_media_info info = {
 			.opaque = s,
@@ -286,28 +300,34 @@ static void ffmpeg_source_open(struct ffmpeg_source *s)
 static void ffmpeg_source_tick(void *data, float seconds)
 {
 	UNUSED_PARAMETER(seconds);
-	uint64_t delta_us;
+	uint64_t delta_us_audio, delta_us_video;
 	struct timespec curr_time;
 	struct timespec last_v;
 	struct timespec last_a;
+	bool audio_timeout = false;
+	bool video_timeout = false;
 
 	struct ffmpeg_source *s = data;
 
 	clock_gettime(CLOCK_MONOTONIC_RAW, &curr_time);
 
 	pthread_mutex_lock(&s->mutex);
-	last_v = s->last_v;
-	last_a = s->last_a;
+	last_v.tv_sec = s->last_v.tv_sec;
+	last_v.tv_nsec = s->last_v.tv_nsec;
+	last_a.tv_sec = s->last_a.tv_sec;
+	last_a.tv_nsec = s->last_a.tv_nsec;
 	pthread_mutex_unlock(&s->mutex);
 
-	delta_us = (curr_time.tv_sec - last_v.tv_sec) * 1000000 + (curr_time.tv_nsec - last_v.tv_nsec) / 1000;
-	if(s->media.v.decoder && delta_us > 1000000) {
-		// printf("video stream timeout\n");
+	delta_us_video = (curr_time.tv_sec - last_v.tv_sec) * 1000000 + (curr_time.tv_nsec - last_v.tv_nsec) / 1000;
+	if(s->media.has_video /*s->media.v.decoder*/ && delta_us_video > 1000000) {
+		PRINT_DEBUG("video stream timeout");
+		video_timeout = true;
 	}
 
-	delta_us = (curr_time.tv_sec - last_a.tv_sec) * 1000000 + (curr_time.tv_nsec - last_a.tv_nsec) / 1000;
-	if(s->media.a.decoder && delta_us > 1000000) {
-		// printf("audio stream timeout\n");
+	delta_us_audio = (curr_time.tv_sec - last_a.tv_sec) * 1000000 + (curr_time.tv_nsec - last_a.tv_nsec) / 1000;
+	if(s->media.has_audio /*s->media.a.decoder*/ && delta_us_audio > 1000000) {
+		PRINT_DEBUG("audio stream timeout");
+		audio_timeout = true;
 	}
 
 	if (s->destroy_media) {
@@ -321,6 +341,7 @@ static void ffmpeg_source_tick(void *data, float seconds)
 
 static void ffmpeg_source_start(struct ffmpeg_source *s)
 {
+	PRINT_DEBUG("ffmpeg_source_start");
 	if (!s->media_valid)
 		ffmpeg_source_open(s);
 
@@ -333,6 +354,7 @@ static void ffmpeg_source_start(struct ffmpeg_source *s)
 
 static void ffmpeg_source_update(void *data, obs_data_t *settings)
 {
+	PRINT_DEBUG("ffmpeg_source_update");
 	struct ffmpeg_source *s = data;
 
 	bool is_local_file = obs_data_get_bool(settings, "is_local_file");
@@ -467,6 +489,7 @@ static void get_nb_frames(void *data, calldata_t *cd)
 
 static void *ffmpeg_source_create(obs_data_t *settings, obs_source_t *source)
 {
+	PRINT_DEBUG("ffmpeg_source_create");
 	UNUSED_PARAMETER(settings);
 
 	struct ffmpeg_source *s = bzalloc(sizeof(struct ffmpeg_source));
@@ -493,6 +516,7 @@ static void *ffmpeg_source_create(obs_data_t *settings, obs_source_t *source)
 
 static void ffmpeg_source_destroy(void *data)
 {
+	PRINT_DEBUG("ffmpeg_source_destroy");
 	struct ffmpeg_source *s = data;
 
 	if (s->hotkey)
@@ -511,6 +535,7 @@ static void ffmpeg_source_destroy(void *data)
 
 static void ffmpeg_source_activate(void *data)
 {
+	PRINT_DEBUG("ffmpeg_source_activate");
 	struct ffmpeg_source *s = data;
 
 	if (s->restart_on_activate)
@@ -519,6 +544,7 @@ static void ffmpeg_source_activate(void *data)
 
 static void ffmpeg_source_deactivate(void *data)
 {
+	PRINT_DEBUG("ffmpeg_source_deactivate");
 	struct ffmpeg_source *s = data;
 
 	if (s->restart_on_activate) {
