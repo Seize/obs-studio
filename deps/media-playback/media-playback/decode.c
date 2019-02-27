@@ -16,13 +16,24 @@
 
 #include "decode.h"
 #include "media.h"
+#include <libavutil/pixdesc.h>
 
 static AVCodec *find_hardware_decoder(enum AVCodecID id)
 {
 	AVHWAccel *hwa = av_hwaccel_next(NULL);
 	AVCodec *c = NULL;
 
+	if(!hwa) {
+		printf("no hwa\n");
+	}
+
+	char pix_fmt_name[1024];
+	memset(pix_fmt_name, 0, 1024);
+
 	while (hwa) {
+		av_get_pix_fmt_string(pix_fmt_name, 1024, hwa->pix_fmt);
+		printf("hwa: name='%s' type='%d' id='%d' pix_fmt='%d' (%s)\n", hwa->name, hwa->type, hwa->id, hwa->pix_fmt, pix_fmt_name);
+
 		if (hwa->id == id) {
 			if (hwa->pix_fmt == AV_PIX_FMT_VDTOOL ||
 				hwa->pix_fmt == AV_PIX_FMT_CUDA ||
@@ -107,9 +118,14 @@ bool mp_decode_init(mp_media_t *m, enum AVMediaType type, bool hw)
 	if (hw) {
 		d->codec = find_hardware_decoder(id);
 		if (d->codec) {
+			printf("mp_decode_init: found HW decoder name='%s' long_name='%s'\n", d->codec->name, d->codec->long_name);
 			ret = mp_open_codec(d);
-			if (ret < 0)
+			if (ret < 0) {
+				printf("mp_decode_init: could not open codec :(\n");
 				d->codec = NULL;
+			}
+		} else {
+			printf("mp_decode_init: HW decoder not found\n");
 		}
 	}
 
@@ -124,14 +140,17 @@ bool mp_decode_init(mp_media_t *m, enum AVMediaType type, bool hw)
 		if (!d->codec) {
 			blog(LOG_WARNING, "MP: Failed to find %s codec",
 					av_get_media_type_string(type));
+			printf("mp_decode_init: SW decoder not found\n");
 			return false;
 		}
+		printf("mp_decode_init: found SW decoder name='%s' long_name='%s'\n", d->codec->name, d->codec->long_name);
 
 		ret = mp_open_codec(d);
 		if (ret < 0) {
 			blog(LOG_WARNING, "MP: Failed to open %s decoder: %s",
 					av_get_media_type_string(type),
 					av_err2str(ret));
+			printf("mp_decode_init: could not open codec :(\n");
 			return false;
 		}
 	}
@@ -321,23 +340,49 @@ bool mp_decode_next(struct mp_decode *d)
 	}
 
 	if (d->frame_ready) {
+		bool debug = false;
 		int64_t last_pts = d->frame_pts;
 
-		if (d->frame->best_effort_timestamp == AV_NOPTS_VALUE)
+		if(debug) {
+			printf("%s bet=%ld pts=%ld, next=%ld tb=%d/%d dur=%ld\n",
+				(d->audio ? "AUDIO" : "VIDEO"),
+				d->frame->best_effort_timestamp,
+				d->frame_pts,
+				d->next_pts,
+				d->stream->time_base.num, d->stream->time_base.den,
+				d->frame->pkt_duration
+			);
+		}
+
+		if (d->frame->best_effort_timestamp == AV_NOPTS_VALUE) {
 			d->frame_pts = d->next_pts;
-		else
+			if(debug) {
+				printf("%s pts <= next\n", (d->audio ? "AUDIO" : "VIDEO"));
+			}
+		} else {
 			d->frame_pts = av_rescale_q(
 					d->frame->best_effort_timestamp,
 					d->stream->time_base,
 					(AVRational){1, 1000000000});
+			if(debug) {
+				printf("%s pts <= av_rescale_q: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), d->frame_pts);
+			}
+		}
 
 		int64_t duration = d->frame->pkt_duration;
-		if (!duration)
+		if (!duration) {
 			duration = get_estimated_duration(d, last_pts);
-		else
+			if(debug) {
+				printf("%s dur <= get_estimated_duration: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), duration);
+			}
+		} else {
 			duration = av_rescale_q(duration,
 					d->stream->time_base,
 					(AVRational){1, 1000000000});
+			if(debug) {
+				printf("%s dur <= av_rescale_q: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), duration);
+			}
+		}
 
 		if (d->m->speed != 100) {
 			d->frame_pts = av_rescale_q(d->frame_pts,
@@ -346,10 +391,16 @@ bool mp_decode_next(struct mp_decode *d)
 			duration = av_rescale_q(duration,
 					(AVRational){1, d->m->speed},
 					(AVRational){1, 100});
+			if(debug) {
+				printf("%s m->speed != 100. NOT SUPPOSED TO HAPPEN\n", (d->audio ? "AUDIO" : "VIDEO"));
+			}
 		}
 
 		d->last_duration = duration;
 		d->next_pts = d->frame_pts + duration;
+		if(debug) {
+			printf("%s last_duration=%ld next=%ld\n", (d->audio ? "AUDIO" : "VIDEO"), d->last_duration, d->next_pts);
+		}
 	}
 
 	return true;
