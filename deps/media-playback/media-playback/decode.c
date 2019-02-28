@@ -14,41 +14,149 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <libavutil/pixdesc.h>
+#include <libavutil/samplefmt.h>
+#include <libavutil/hwcontext.h>
 #include "decode.h"
 #include "media.h"
-#include <libavutil/pixdesc.h>
 
-static AVCodec *find_hardware_decoder(enum AVCodecID id)
+#define PRINT_DEBUG(fmt, args...) {\
+	if(Debug) { \
+		printf(fmt "\n", ##args); \
+	} \
+}
+
+static bool Debug = true;
+static AVBufferRef *hw_device_ctx = NULL;
+static enum AVPixelFormat hw_pix_fmt;
+static enum AVHWDeviceType type;
+static bool hw_dec = false;
+
+static int hw_decoder_init(AVCodecContext *ctx, const enum AVHWDeviceType type) {
+    int err = av_hwdevice_ctx_create(&hw_device_ctx, type, NULL, NULL, 0);
+
+    if(err < 0) {
+        PRINT_DEBUG("av_hwdevice_ctx_create failed");
+        return err;
+    }
+    ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+
+    return err;
+}
+
+static enum AVPixelFormat get_hw_format(struct AVCodecContext *s, const enum AVPixelFormat *pix_fmts) {
+    const enum AVPixelFormat *p;
+
+    for (p = pix_fmts; *p != -1; p++) {
+        if (*p == hw_pix_fmt)
+            return *p;
+    }
+
+    PRINT_DEBUG("Failed to get HW surface format.");
+    return AV_PIX_FMT_NONE;
+}
+
+static AVCodec *find_hardware_decoder(AVStream* stream)
 {
-	AVHWAccel *hwa = av_hwaccel_next(NULL);
-	AVCodec *c = NULL;
-
-	if(!hwa) {
-		printf("no hwa\n");
-	}
+    int i;
+	int nb_supported_device_types = 0;
+	enum AVCodecID id;
+    AVCodec *decoder = NULL;
+	char** supported_types;
 
 	char pix_fmt_name[1024];
 	memset(pix_fmt_name, 0, 1024);
 
-	while (hwa) {
-		av_get_pix_fmt_string(pix_fmt_name, 1024, hwa->pix_fmt);
-		printf("hwa: name='%s' type='%d' id='%d' pix_fmt='%d' (%s)\n", hwa->name, hwa->type, hwa->id, hwa->pix_fmt, pix_fmt_name);
+#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(57, 40, 101)
+	id = stream->codecpar->codec_id;
+#else
+	id = stream->codec->codec_id;
+#endif
 
-		if (hwa->id == id) {
-			if (hwa->pix_fmt == AV_PIX_FMT_VDTOOL ||
-				hwa->pix_fmt == AV_PIX_FMT_CUDA ||
-				hwa->pix_fmt == AV_PIX_FMT_DXVA2_VLD ||
-			    hwa->pix_fmt == AV_PIX_FMT_VAAPI_VLD) {
-				c = avcodec_find_decoder_by_name(hwa->name);
-				if (c)
-					break;
-			}
-		}
+	char* types[] = {
+		"AV_HWDEVICE_TYPE_VDPAU",
+		"AV_HWDEVICE_TYPE_CUDA",
+		"AV_HWDEVICE_TYPE_VAAPI",
+		"AV_HWDEVICE_TYPE_DXVA2",
+		"AV_HWDEVICE_TYPE_QSV",
+		// "AV_HWDEVICE_TYPE_VIDEOTOOLBOX",
+		// "AV_HWDEVICE_TYPE_D3D11VA",
+		// "AV_HWDEVICE_TYPE_DRM",
+		// "AV_HWDEVICE_TYPE_OPENCL",
+		// "AV_HWDEVICE_TYPE_MEDIACODEC"
+		"AV_HWDEVICE_TYPE_NONE",
+	};
 
-		hwa = av_hwaccel_next(hwa);
+	PRINT_DEBUG("=========================\n= find_hardware_decoder =\n=========================");
+	PRINT_DEBUG("codec id: %d", id);
+
+	PRINT_DEBUG("Available device types:");
+	type = AV_HWDEVICE_TYPE_NONE;
+	while((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE) {
+		PRINT_DEBUG("    %s", av_hwdevice_get_type_name(type));
+		nb_supported_device_types++;
 	}
 
-	return c;
+	supported_types = malloc(nb_supported_device_types * sizeof(char*));
+
+	type = AV_HWDEVICE_TYPE_NONE;
+	i = 0;
+	while((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE && i<nb_supported_device_types) {
+		const char* name = av_hwdevice_get_type_name(type);
+		int length = strlen(name);
+		supported_types[i] = malloc(length);
+		strcpy(supported_types[i], name);
+		i++;
+	}
+
+	for(i = 0; nb_supported_device_types; i++) {
+		type = av_hwdevice_find_type_by_name(supported_types[i]);
+		if (type == AV_HWDEVICE_TYPE_NONE) {
+			PRINT_DEBUG("HW device type '%s' = %d not supported", supported_types[i], type);
+			if(strcmp(types[i], "AV_HWDEVICE_TYPE_NONE") == 0) {
+				break;
+			}
+		} else {
+			PRINT_DEBUG("HW device type '%s' = %d is supported", supported_types[i], type);
+			break;
+		}
+	}
+
+	for(i=0; i<nb_supported_device_types; i++) {
+		free(supported_types[i]);
+	}
+	free(supported_types);
+
+	if (type == AV_HWDEVICE_TYPE_NONE) {
+		PRINT_DEBUG("Found no supported HW device type");
+		return NULL;
+	}
+
+	decoder = avcodec_find_decoder(id);
+	if (!decoder) {
+        PRINT_DEBUG("avcodec_find_decoder failed");
+        return NULL;
+	}
+
+	 for (i = 0;; i++) {
+        const AVCodecHWConfig *config = avcodec_get_hw_config(decoder, i);
+        if (!config) {
+            PRINT_DEBUG("No HW decoder available for %s", decoder->name);
+            return NULL;
+        }
+
+		av_get_pix_fmt_string(pix_fmt_name, 1024, config->pix_fmt);
+		PRINT_DEBUG("hw config: pix_fmt: '%d' (%s), methods='%d', type='%d'", config->pix_fmt, pix_fmt_name, config->methods, config->device_type);
+
+        if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX /*&& config->device_type == type*/) {
+			hw_pix_fmt = config->pix_fmt;
+			hw_dec = true;
+			PRINT_DEBUG("found codec hw config with pix_fmt: %d", hw_pix_fmt);
+            break;
+        }
+    }
+
+	return decoder;
 }
 
 static int mp_open_codec(struct mp_decode *d)
@@ -77,6 +185,16 @@ static int mp_open_codec(struct mp_decode *d)
 	    c->codec_id != AV_CODEC_ID_MPEG4 &&
 	    c->codec_id != AV_CODEC_ID_WEBP)
 		c->thread_count = 0;
+
+	// TODO
+	if(hw_dec) {
+		c->get_format = get_hw_format;
+
+		if(hw_decoder_init(c, type) < 0) {
+			PRINT_DEBUG("hw_decoder_init failed");
+			goto fail;
+		}
+	}
 
 	ret = avcodec_open2(c, d->codec, NULL);
 	if (ret < 0)
@@ -115,17 +233,18 @@ bool mp_decode_init(mp_media_t *m, enum AVMediaType type, bool hw)
 	id = stream->codec->codec_id;
 #endif
 
-	if (hw) {
-		d->codec = find_hardware_decoder(id);
+	// TODO don't restrict to video only
+	if (hw && type == AVMEDIA_TYPE_VIDEO) {
+		d->codec = find_hardware_decoder(stream);
 		if (d->codec) {
-			printf("mp_decode_init: found HW decoder name='%s' long_name='%s'\n", d->codec->name, d->codec->long_name);
+			PRINT_DEBUG("mp_decode_init: found HW decoder name='%s' long_name='%s'", d->codec->name, d->codec->long_name);
 			ret = mp_open_codec(d);
 			if (ret < 0) {
-				printf("mp_decode_init: could not open codec :(\n");
+				PRINT_DEBUG("mp_decode_init: could not open codec :(");
 				d->codec = NULL;
 			}
 		} else {
-			printf("mp_decode_init: HW decoder not found\n");
+			PRINT_DEBUG("mp_decode_init: HW decoder not found");
 		}
 	}
 
@@ -140,17 +259,17 @@ bool mp_decode_init(mp_media_t *m, enum AVMediaType type, bool hw)
 		if (!d->codec) {
 			blog(LOG_WARNING, "MP: Failed to find %s codec",
 					av_get_media_type_string(type));
-			printf("mp_decode_init: SW decoder not found\n");
+			PRINT_DEBUG("mp_decode_init: SW decoder not found");
 			return false;
 		}
-		printf("mp_decode_init: found SW decoder name='%s' long_name='%s'\n", d->codec->name, d->codec->long_name);
+		PRINT_DEBUG("mp_decode_init: found SW decoder name='%s' long_name='%s'", d->codec->name, d->codec->long_name);
 
 		ret = mp_open_codec(d);
 		if (ret < 0) {
 			blog(LOG_WARNING, "MP: Failed to open %s decoder: %s",
 					av_get_media_type_string(type),
 					av_err2str(ret));
-			printf("mp_decode_init: could not open codec :(\n");
+			PRINT_DEBUG("mp_decode_init: could not open codec :(");
 			return false;
 		}
 	}
@@ -344,7 +463,7 @@ bool mp_decode_next(struct mp_decode *d)
 		int64_t last_pts = d->frame_pts;
 
 		if(debug) {
-			printf("%s bet=%ld pts=%ld, next=%ld tb=%d/%d dur=%ld\n",
+			PRINT_DEBUG("%s bet=%ld pts=%ld, next=%ld tb=%d/%d dur=%ld\n",
 				(d->audio ? "AUDIO" : "VIDEO"),
 				d->frame->best_effort_timestamp,
 				d->frame_pts,
@@ -357,7 +476,7 @@ bool mp_decode_next(struct mp_decode *d)
 		if (d->frame->best_effort_timestamp == AV_NOPTS_VALUE) {
 			d->frame_pts = d->next_pts;
 			if(debug) {
-				printf("%s pts <= next\n", (d->audio ? "AUDIO" : "VIDEO"));
+				PRINT_DEBUG("%s pts <= next\n", (d->audio ? "AUDIO" : "VIDEO"));
 			}
 		} else {
 			d->frame_pts = av_rescale_q(
@@ -365,7 +484,7 @@ bool mp_decode_next(struct mp_decode *d)
 					d->stream->time_base,
 					(AVRational){1, 1000000000});
 			if(debug) {
-				printf("%s pts <= av_rescale_q: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), d->frame_pts);
+				PRINT_DEBUG("%s pts <= av_rescale_q: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), d->frame_pts);
 			}
 		}
 
@@ -373,14 +492,14 @@ bool mp_decode_next(struct mp_decode *d)
 		if (!duration) {
 			duration = get_estimated_duration(d, last_pts);
 			if(debug) {
-				printf("%s dur <= get_estimated_duration: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), duration);
+				PRINT_DEBUG("%s dur <= get_estimated_duration: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), duration);
 			}
 		} else {
 			duration = av_rescale_q(duration,
 					d->stream->time_base,
 					(AVRational){1, 1000000000});
 			if(debug) {
-				printf("%s dur <= av_rescale_q: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), duration);
+				PRINT_DEBUG("%s dur <= av_rescale_q: %ld\n", (d->audio ? "AUDIO" : "VIDEO"), duration);
 			}
 		}
 
@@ -392,14 +511,14 @@ bool mp_decode_next(struct mp_decode *d)
 					(AVRational){1, d->m->speed},
 					(AVRational){1, 100});
 			if(debug) {
-				printf("%s m->speed != 100. NOT SUPPOSED TO HAPPEN\n", (d->audio ? "AUDIO" : "VIDEO"));
+				PRINT_DEBUG("%s m->speed != 100. NOT SUPPOSED TO HAPPEN\n", (d->audio ? "AUDIO" : "VIDEO"));
 			}
 		}
 
 		d->last_duration = duration;
 		d->next_pts = d->frame_pts + duration;
 		if(debug) {
-			printf("%s last_duration=%ld next=%ld\n", (d->audio ? "AUDIO" : "VIDEO"), d->last_duration, d->next_pts);
+			PRINT_DEBUG("%s last_duration=%ld next=%ld\n", (d->audio ? "AUDIO" : "VIDEO"), d->last_duration, d->next_pts);
 		}
 	}
 

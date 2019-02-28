@@ -194,6 +194,12 @@ static bool mp_media_init_scaling(mp_media_t *m)
 
 static bool mp_media_prepare_frames(mp_media_t *m)
 {
+
+	char pix_fmt_name1[1024];
+	char pix_fmt_name2[1024];
+	memset(pix_fmt_name1, 0, 1024);
+	memset(pix_fmt_name2, 0, 1024);
+
 	while (!mp_media_ready_to_start(m)) {
 		if (!m->eof) {
 			int ret = mp_media_next_packet(m);
@@ -211,6 +217,11 @@ static bool mp_media_prepare_frames(mp_media_t *m)
 
 	if (m->has_video && m->v.frame_ready && !m->swscale) {
 		m->scale_format = closest_format(m->v.frame->format);
+
+		av_get_pix_fmt_string(pix_fmt_name1, 1024, m->scale_format);
+		av_get_pix_fmt_string(pix_fmt_name2, 1024, m->v.frame->format);
+		printf("scale_format=%d (%s), frame->format=%d (%s)\n", m->scale_format, pix_fmt_name1, m->v.frame->format, pix_fmt_name2);
+
 		if (m->scale_format != m->v.frame->format) {
 			if (!mp_media_init_scaling(m)) {
 				return false;
