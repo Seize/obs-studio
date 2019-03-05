@@ -25,6 +25,13 @@
 #include <libavdevice/avdevice.h>
 #include <libavutil/imgutils.h>
 
+#define PRINT_DEBUG(fmt, args...) {\
+	if(Debug) { \
+		printf(fmt "\n", ##args); \
+	} \
+}
+
+static bool Debug = false;
 static int64_t base_sys_ts = 0;
 
 static inline enum video_format convert_pixel_format(int f)
@@ -161,6 +168,168 @@ static inline int get_sws_range(enum AVColorRange r)
 
 #define FIXED_1_0 (1<<16)
 
+// CreateFilter create an AVFilterContext according to the given type.
+AVFilterContext* CreateFilter(AVFilterGraph* graph, char* type, char* name, char* args) {
+	int ret;
+	const AVFilter* filter_def = NULL;
+	AVFilterContext* filter = NULL;
+
+	if (type == NULL || name == NULL || args == NULL) {
+		PRINT_DEBUG("NULL param");
+		return NULL;
+	}
+
+	filter_def = avfilter_get_by_name(type);
+	if (filter_def == NULL) {
+		PRINT_DEBUG("avfilter type '%s' not found", type);
+		return NULL;
+	}
+
+	PRINT_DEBUG("Create filter '%s' (type: '%s') with args:'%s'", name, type, args);
+
+	ret = avfilter_graph_create_filter(&filter, filter_def, name, args, NULL, graph);
+	if (ret != 0 || filter == NULL) {
+		PRINT_DEBUG("avfilter_graph_create_filter failed, ret=%d", ret);
+		if (filter != NULL) {
+			avfilter_free(filter);
+		}
+		filter = NULL;
+	}
+
+	return filter;
+}
+
+// AddFilter creates a filter and adds it in the filtergraph, after prevFilter
+AVFilterContext* AddFilter(AVFilterGraph* graph, AVFilterContext* prev_filter, char* type, char* name, char* args) {
+	int ret;
+	AVFilterContext* new_filter = CreateFilter(graph, type, name, args);
+	if (new_filter == NULL) {
+		PRINT_DEBUG("avfilter_graph_create_filter failed");
+		return NULL;
+	}
+
+	ret = avfilter_link(prev_filter, 0, new_filter, 0);
+	if (ret < 0) {
+		PRINT_DEBUG("second avfilter_link failed: %d", ret);
+		avfilter_free(new_filter);
+		return NULL;
+	}
+
+	return new_filter;
+}
+
+static bool mp_media_init_hw_scaling(mp_media_t *m) {
+	char args[512];
+	int ret = 0;
+	AVRational time_base;
+	int video_stream_index;
+	AVBufferSrcParameters param;
+
+	enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_NV12, AV_PIX_FMT_NONE };
+	char pix_fmt_str[] = "nv12";
+
+	if(!m->fmt || !m->v.decoder) {
+		PRINT_DEBUG("input fmt or video dec not ready");
+		return false;
+	}
+
+	video_stream_index = av_find_best_stream(m->fmt, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+	if(video_stream_index < 0) {
+		PRINT_DEBUG("video_stream_index is invalid");
+		return false;
+	}
+	time_base = m->fmt->streams[video_stream_index]->time_base;
+
+	// Filter graph
+	m->hwscale.filter_graph = avfilter_graph_alloc();
+	if (!m->hwscale.filter_graph) {
+		PRINT_DEBUG("avfilter_graph_alloc failed");
+		ret = AVERROR(ENOMEM);
+		goto end;
+	}
+
+   // buffer video source: the decoded frames from the decoder will be inserted here
+	snprintf(args, sizeof(args), "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
+			m->v.decoder->width, m->v.decoder->height, m->v.decoder->pix_fmt,
+			time_base.num, time_base.den,
+			m->v.decoder->sample_aspect_ratio.num, m->v.decoder->sample_aspect_ratio.den);
+
+	m->hwscale.buffersrc_ctx = CreateFilter(m->hwscale.filter_graph, "buffer", "in", args);
+	if (m->hwscale.buffersrc_ctx == NULL) {
+		PRINT_DEBUG("CreateFilter buffersrc_ctx failed");
+		return -1;
+	}
+
+	param.format = m->v.decoder->pix_fmt;
+	param.time_base = time_base;
+	param.width = m->v.decoder->width;
+	param.height = m->v.decoder->height;
+	param.sample_aspect_ratio = m->v.decoder->sample_aspect_ratio;
+	// param.frame_rate = ; // TODO set to a non-zero value if input stream has a known constant framerate
+	param.hw_frames_ctx = av_buffer_ref(m->v.decoder->hw_frames_ctx);
+
+	ret = av_buffersrc_parameters_set(m->hwscale.buffersrc_ctx, &param);
+	if(ret != 0) {
+		PRINT_DEBUG("av_buffersrc_parameters_set failed");
+		return -1;
+	}
+
+	// Upload to GPU
+	m->hwscale.hwupload_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.buffersrc_ctx, "hwupload", "hwupload", "");
+	if (m->hwscale.hwupload_ctx == NULL) {
+		PRINT_DEBUG("AddFilter hwupload_ctx failed");
+		return -1;
+	}
+	m->hwscale.hwupload_ctx->hw_device_ctx = av_buffer_ref(m->hwscale.hw_device_ctx); // TODO needed or not ?
+
+	// GPU Scaler
+	snprintf(args, sizeof(args), "w=%d:h=%d:format=nv12:interp_algo=linear", m->v.decoder->width, m->v.decoder->height);
+	m->hwscale.scalenpp_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.hwupload_ctx, "scale_npp", "scale_npp", args);
+	if (m->hwscale.scalenpp_ctx == NULL) {
+		PRINT_DEBUG("AddFilter scalenpp_ctx failed");
+		return -1;
+	}
+
+	// Download from GPU
+	m->hwscale.hwdownload_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.scalenpp_ctx, "hwdownload", "hwdownload", "");
+	if (m->hwscale.hwdownload_ctx == NULL) {
+		PRINT_DEBUG("AddFilter hwdownload_ctx failed");
+		return -1;
+	}
+
+	// buffer video sink: to terminate the filter chain
+	m->hwscale.buffersink_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.hwdownload_ctx, "buffersink", "out", "");
+	if (m->hwscale.buffersink_ctx == NULL) {
+		PRINT_DEBUG("AddFilter buffersink_ctx failed");
+		return -1;
+	}
+
+	ret = av_opt_set_int_list(m->hwscale.buffersink_ctx, "pix_fmts", pix_fmts, AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+	if (ret < 0) {
+		PRINT_DEBUG("Cannot set output pixel format");
+		goto end;
+	}
+
+	// Validate filter graph
+	if ((ret = avfilter_graph_config(m->hwscale.filter_graph, NULL)) < 0) {
+		PRINT_DEBUG("avfilter_graph_config failed");
+		goto end;
+	}
+
+	// Alloc output frame
+	m->hwscale.filt_frame = av_frame_alloc();
+	if (!m->hwscale.filt_frame) {
+		PRINT_DEBUG("Could not allocate filtered frame");
+		goto end;
+	}
+
+	m->hwscale.init = true;
+	return true;
+
+end:
+	return false;
+}
+
 static bool mp_media_init_scaling(mp_media_t *m)
 {
 	int space = get_sws_colorspace(m->v.decoder->colorspace);
@@ -194,12 +363,6 @@ static bool mp_media_init_scaling(mp_media_t *m)
 
 static bool mp_media_prepare_frames(mp_media_t *m)
 {
-
-	char pix_fmt_name1[1024];
-	char pix_fmt_name2[1024];
-	memset(pix_fmt_name1, 0, 1024);
-	memset(pix_fmt_name2, 0, 1024);
-
 	while (!mp_media_ready_to_start(m)) {
 		if (!m->eof) {
 			int ret = mp_media_next_packet(m);
@@ -218,11 +381,13 @@ static bool mp_media_prepare_frames(mp_media_t *m)
 	if (m->has_video && m->v.frame_ready && !m->swscale) {
 		m->scale_format = closest_format(m->v.frame->format);
 
-		av_get_pix_fmt_string(pix_fmt_name1, 1024, m->scale_format);
-		av_get_pix_fmt_string(pix_fmt_name2, 1024, m->v.frame->format);
-		printf("scale_format=%d (%s), frame->format=%d (%s)\n", m->scale_format, pix_fmt_name1, m->v.frame->format, pix_fmt_name2);
-
-		if (m->scale_format != m->v.frame->format) {
+		if(m->v.frame->format == AV_PIX_FMT_CUDA) {
+			if(!m->hwscale.init){
+				if(!mp_media_init_hw_scaling(m)) {
+					return false;
+				}
+			}
+		} else if (m->scale_format != m->v.frame->format) {
 			if (!mp_media_init_scaling(m)) {
 				return false;
 			}
@@ -331,6 +496,35 @@ static void mp_media_next_video(mp_media_t *m, bool preload)
 			frame->linesize[i] = abs(m->scale_linesizes[i]);
 		}
 
+	} else if (m->hwscale.init) {
+		f->hw_frames_ctx = av_buffer_ref(m->v.decoder->hw_frames_ctx);
+
+		// push the decoded frame into the filtergraph
+		if (av_buffersrc_add_frame_flags(m->hwscale.buffersrc_ctx, f, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
+			PRINT_DEBUG("Error while feeding the filtergraph");
+		}
+
+		// pull filtered frames from the filtergraph
+		// TODO will drop frames if deinterlacing or changing framerate
+		while (1) {
+			av_frame_unref(m->hwscale.filt_frame);
+			int ret = av_buffersink_get_frame(m->hwscale.buffersink_ctx, m->hwscale.filt_frame);
+			if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+				// No more frames
+				break;
+			}
+			if (ret < 0) {
+				PRINT_DEBUG("av_buffersink_get_frame: ret < 0");
+				break;
+			}
+
+			flip = m->hwscale.filt_frame->linesize[0] < 0 && m->hwscale.filt_frame->linesize[1] == 0;
+
+			for (size_t i = 0; i < MAX_AV_PLANES; i++) {
+				frame->data[i] = m->hwscale.filt_frame->data[i];
+				frame->linesize[i] = abs(m->hwscale.filt_frame->linesize[i]);
+			}
+		}
 	} else {
 		flip = f->linesize[0] < 0 && f->linesize[1] == 0;
 
@@ -370,12 +564,15 @@ static void mp_media_next_video(mp_media_t *m, bool preload)
 
 		if (!success) {
 			frame->format = VIDEO_FORMAT_NONE;
+			PRINT_DEBUG("video_format_get_parameters failed\n");
 			return;
 		}
 	}
 
-	if (frame->format == VIDEO_FORMAT_NONE)
+	if (frame->format == VIDEO_FORMAT_NONE) {
+		PRINT_DEBUG("frame->format == VIDEO_FORMAT_NONE\n");
 		return;
+	}
 
 	frame->timestamp = m->base_ts + d->frame_pts - m->start_ts +
 		m->play_sys_ts - base_sys_ts;
@@ -700,6 +897,9 @@ bool mp_media_init(mp_media_t *media, const struct mp_media_info *info)
 	media->buffering = info->buffering;
 	media->speed = info->speed;
 	media->is_local_file = info->is_local_file;
+	// Hwscale
+	memset(&media->hwscale, 0, sizeof(media->hwscale));
+	media->hwscale.hw_pix_fmt = AV_PIX_FMT_NONE;
 
 	if (!info->is_local_file || media->speed < 1 || media->speed > 200)
 		media->speed = 100;
@@ -749,6 +949,8 @@ void mp_media_free(mp_media_t *media)
 	pthread_mutex_destroy(&media->mutex);
 	os_sem_destroy(media->sem);
 	sws_freeContext(media->swscale);
+	avfilter_graph_free(&media->hwscale.filter_graph);
+	av_frame_unref(media->hwscale.filt_frame);
 	av_freep(&media->scale_pic[0]);
 	bfree(media->path);
 	bfree(media->format_name);

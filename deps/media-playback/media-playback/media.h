@@ -32,6 +32,8 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
 #include <util/threading.h>
 
 #ifdef _MSC_VER
@@ -41,6 +43,22 @@ extern "C" {
 typedef void (*mp_video_cb)(void *opaque, struct obs_source_frame *frame);
 typedef void (*mp_audio_cb)(void *opaque, struct obs_source_audio *audio);
 typedef void (*mp_stop_cb)(void *opaque);
+
+struct HwsContext {
+	bool init;
+	// HW device
+	AVBufferRef *hw_device_ctx;
+	enum AVPixelFormat hw_pix_fmt;
+	enum AVHWDeviceType hw_device_type;
+	// Filter graph
+	AVFilterContext *buffersrc_ctx;
+	AVFilterContext *hwupload_ctx;
+	AVFilterContext *scalenpp_ctx;
+	AVFilterContext *hwdownload_ctx;
+	AVFilterContext *buffersink_ctx;
+	AVFilterGraph *filter_graph;
+    AVFrame *filt_frame;
+};
 
 struct mp_media {
 	AVFormatContext *fmt;
@@ -58,6 +76,7 @@ struct mp_media {
 
 	enum AVPixelFormat scale_format;
 	struct SwsContext *swscale;
+	struct HwsContext hwscale;
 	int scale_linesizes[4];
 	uint8_t *scale_pic[4];
 

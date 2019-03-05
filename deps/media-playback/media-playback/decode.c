@@ -26,43 +26,56 @@
 	} \
 }
 
-static bool Debug = true;
-static AVBufferRef *hw_device_ctx = NULL;
-static enum AVPixelFormat hw_pix_fmt;
-static enum AVHWDeviceType type;
-static bool hw_dec = false;
-
-static int hw_decoder_init(AVCodecContext *ctx, const enum AVHWDeviceType type) {
-    int err = av_hwdevice_ctx_create(&hw_device_ctx, type, NULL, NULL, 0);
-
-    if(err < 0) {
-        PRINT_DEBUG("av_hwdevice_ctx_create failed");
-        return err;
-    }
-    ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-
-    return err;
-}
+static bool Debug = false;
 
 static enum AVPixelFormat get_hw_format(struct AVCodecContext *s, const enum AVPixelFormat *pix_fmts) {
-    const enum AVPixelFormat *p;
+	PRINT_DEBUG("== get_hw_format ==");
+	const enum AVPixelFormat *p;
 
-    for (p = pix_fmts; *p != -1; p++) {
-        if (*p == hw_pix_fmt)
-            return *p;
-    }
+	for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
+		if (*p == AV_PIX_FMT_CUDA) {
+			AVHWFramesContext  *frames_ctx;
+			int ret;
 
-    PRINT_DEBUG("Failed to get HW surface format.");
-    return AV_PIX_FMT_NONE;
+			// create a pool of surfaces to be used by the decoder
+			s->hw_frames_ctx = av_hwframe_ctx_alloc(s->hw_device_ctx);
+			if (!s->hw_frames_ctx) {
+				PRINT_DEBUG("av_hwframe_ctx_alloc failed");
+				return AV_PIX_FMT_NONE;
+			}
+
+			frames_ctx   = (AVHWFramesContext*)s->hw_frames_ctx->data;
+			frames_ctx->format            = AV_PIX_FMT_CUDA;
+			frames_ctx->sw_format         = s->sw_pix_fmt;
+			frames_ctx->width             = s->coded_width; // TODO align w and h ?
+			frames_ctx->height            = s->coded_height;
+			frames_ctx->initial_pool_size = 32;
+
+			PRINT_DEBUG("format=%d, sw_format=%d, w=%d, h=%d",
+				frames_ctx->format, frames_ctx->sw_format, frames_ctx->width, frames_ctx->height);
+
+			ret = av_hwframe_ctx_init(s->hw_frames_ctx);
+			if (ret < 0) {
+				PRINT_DEBUG("av_hwframe_ctx_init failed");
+				return AV_PIX_FMT_NONE;
+			}
+
+			return *p;
+		}
+	}
+
+	PRINT_DEBUG("Failed to get HW surface format.");
+	return AV_PIX_FMT_NONE;
 }
 
-static AVCodec *find_hardware_decoder(AVStream* stream)
+static AVCodec *find_hardware_decoder(struct mp_decode* d, AVStream* stream)
 {
-    int i;
+	int i;
 	int nb_supported_device_types = 0;
 	enum AVCodecID id;
-    AVCodec *decoder = NULL;
+	AVCodec *decoder = NULL;
 	char** supported_types;
+	enum AVHWDeviceType type;
 
 	char pix_fmt_name[1024];
 	memset(pix_fmt_name, 0, 1024);
@@ -87,9 +100,7 @@ static AVCodec *find_hardware_decoder(AVStream* stream)
 		"AV_HWDEVICE_TYPE_NONE",
 	};
 
-	PRINT_DEBUG("=========================\n= find_hardware_decoder =\n=========================");
-	PRINT_DEBUG("codec id: %d", id);
-
+	PRINT_DEBUG("find_hardware_decoder, codec id: %d", id);
 	PRINT_DEBUG("Available device types:");
 	type = AV_HWDEVICE_TYPE_NONE;
 	while((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE) {
@@ -134,27 +145,31 @@ static AVCodec *find_hardware_decoder(AVStream* stream)
 
 	decoder = avcodec_find_decoder(id);
 	if (!decoder) {
-        PRINT_DEBUG("avcodec_find_decoder failed");
-        return NULL;
+		PRINT_DEBUG("avcodec_find_decoder failed");
+		return NULL;
 	}
 
 	 for (i = 0;; i++) {
-        const AVCodecHWConfig *config = avcodec_get_hw_config(decoder, i);
-        if (!config) {
-            PRINT_DEBUG("No HW decoder available for %s", decoder->name);
-            return NULL;
-        }
+		const AVCodecHWConfig *config = avcodec_get_hw_config(decoder, i);
+		if (!config) {
+			PRINT_DEBUG("No HW decoder available for %s", decoder->name);
+			return NULL;
+		}
 
 		av_get_pix_fmt_string(pix_fmt_name, 1024, config->pix_fmt);
 		PRINT_DEBUG("hw config: pix_fmt: '%d' (%s), methods='%d', type='%d'", config->pix_fmt, pix_fmt_name, config->methods, config->device_type);
 
-        if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX /*&& config->device_type == type*/) {
-			hw_pix_fmt = config->pix_fmt;
-			hw_dec = true;
-			PRINT_DEBUG("found codec hw config with pix_fmt: %d", hw_pix_fmt);
-            break;
-        }
-    }
+		if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX /* TODO && config->device_type == type*/) {
+			// TODO keep first
+			//if(d->m->hwscale.hw_device_type == AV_HWDEVICE_TYPE_NONE)
+			{
+				d->m->hwscale.hw_device_type = type;
+				d->m->hwscale.hw_pix_fmt = config->pix_fmt;
+				break;
+			}
+			PRINT_DEBUG("found codec hw config with type: %d, and pix_fmt: %d", d->m->hwscale.hw_device_type, d->m->hwscale.hw_pix_fmt);
+		}
+	}
 
 	return decoder;
 }
@@ -186,14 +201,14 @@ static int mp_open_codec(struct mp_decode *d)
 	    c->codec_id != AV_CODEC_ID_WEBP)
 		c->thread_count = 0;
 
-	// TODO
-	if(hw_dec) {
-		c->get_format = get_hw_format;
-
-		if(hw_decoder_init(c, type) < 0) {
-			PRINT_DEBUG("hw_decoder_init failed");
+	if(d->m->hwscale.hw_device_type != AV_HWDEVICE_TYPE_NONE) {
+		ret = av_hwdevice_ctx_create(&d->m->hwscale.hw_device_ctx, d->m->hwscale.hw_device_type, NULL, NULL, 0);
+		if(ret < 0) {
+			PRINT_DEBUG("av_hwdevice_ctx_create failed");
 			goto fail;
 		}
+		c->hw_device_ctx = av_buffer_ref(d->m->hwscale.hw_device_ctx);
+		c->get_format = get_hw_format;
 	}
 
 	ret = avcodec_open2(c, d->codec, NULL);
@@ -235,7 +250,7 @@ bool mp_decode_init(mp_media_t *m, enum AVMediaType type, bool hw)
 
 	// TODO don't restrict to video only
 	if (hw && type == AVMEDIA_TYPE_VIDEO) {
-		d->codec = find_hardware_decoder(stream);
+		d->codec = find_hardware_decoder(d, stream);
 		if (d->codec) {
 			PRINT_DEBUG("mp_decode_init: found HW decoder name='%s' long_name='%s'", d->codec->name, d->codec->long_name);
 			ret = mp_open_codec(d);
