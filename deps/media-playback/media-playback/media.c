@@ -506,8 +506,8 @@ static void mp_media_next_video(mp_media_t *m, bool preload)
 
 		// pull filtered frames from the filtergraph
 		// TODO will drop frames if deinterlacing or changing framerate
+		av_frame_unref(m->hwscale.filt_frame);
 		while (1) {
-			av_frame_unref(m->hwscale.filt_frame);
 			int ret = av_buffersink_get_frame(m->hwscale.buffersink_ctx, m->hwscale.filt_frame);
 			if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
 				// No more frames
@@ -518,11 +518,13 @@ static void mp_media_next_video(mp_media_t *m, bool preload)
 				break;
 			}
 
-			flip = m->hwscale.filt_frame->linesize[0] < 0 && m->hwscale.filt_frame->linesize[1] == 0;
+			f = m->hwscale.filt_frame;
+
+			flip = f->linesize[0] < 0 && f->linesize[1] == 0;
 
 			for (size_t i = 0; i < MAX_AV_PLANES; i++) {
-				frame->data[i] = m->hwscale.filt_frame->data[i];
-				frame->linesize[i] = abs(m->hwscale.filt_frame->linesize[i]);
+				frame->data[i] = f->data[i];
+				frame->linesize[i] = abs(f->linesize[i]);
 			}
 		}
 	} else {
@@ -901,6 +903,12 @@ bool mp_media_init(mp_media_t *media, const struct mp_media_info *info)
 	memset(&media->hwscale, 0, sizeof(media->hwscale));
 	media->hwscale.hw_pix_fmt = AV_PIX_FMT_NONE;
 
+	media->hwscale.fd = fopen("ffdump.yuv", "w+");
+	if(!media->hwscale.fd) {
+		PRINT_DEBUG("couldn't open ffdump.yuv");
+		return false;
+	}
+
 	if (!info->is_local_file || media->speed < 1 || media->speed > 200)
 		media->speed = 100;
 
@@ -951,6 +959,7 @@ void mp_media_free(mp_media_t *media)
 	sws_freeContext(media->swscale);
 	avfilter_graph_free(&media->hwscale.filter_graph);
 	av_frame_unref(media->hwscale.filt_frame);
+	fclose(media->hwscale.fd);
 	av_freep(&media->scale_pic[0]);
 	bfree(media->path);
 	bfree(media->format_name);
