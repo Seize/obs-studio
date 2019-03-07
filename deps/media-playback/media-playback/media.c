@@ -274,17 +274,9 @@ static bool mp_media_init_hw_scaling(mp_media_t *m) {
 		return -1;
 	}
 
-	// Upload to GPU
-	m->hwscale.hwupload_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.buffersrc_ctx, "hwupload", "hwupload", "");
-	if (m->hwscale.hwupload_ctx == NULL) {
-		PRINT_DEBUG("AddFilter hwupload_ctx failed");
-		return -1;
-	}
-	m->hwscale.hwupload_ctx->hw_device_ctx = av_buffer_ref(m->hwscale.hw_device_ctx); // TODO needed or not ?
-
 	// GPU Scaler
-	snprintf(args, sizeof(args), "w=%d:h=%d:format=nv12:interp_algo=linear", m->v.decoder->width, m->v.decoder->height);
-	m->hwscale.scalenpp_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.hwupload_ctx, "scale_npp", "scale_npp", args);
+	snprintf(args, sizeof(args), "w=%d:h=%d:format=%s:interp_algo=linear", m->v.decoder->width, m->v.decoder->height, pix_fmt_str);
+	m->hwscale.scalenpp_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.buffersrc_ctx, "scale_npp", "scale_npp", args);
 	if (m->hwscale.scalenpp_ctx == NULL) {
 		PRINT_DEBUG("AddFilter scalenpp_ctx failed");
 		return -1;
