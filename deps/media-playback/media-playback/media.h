@@ -52,8 +52,8 @@ struct HwsContext {
 	enum AVHWDeviceType hw_device_type;
 	// Filter graph
 	AVFilterContext *buffersrc_ctx;
-	AVFilterContext *scalenpp_ctx;
 	AVFilterContext *hwdownload_ctx;
+	AVFilterContext *vformat_ctx;
 	AVFilterContext *buffersink_ctx;
 	AVFilterGraph *filter_graph;
     AVFrame *filt_frame;

@@ -274,23 +274,22 @@ static bool mp_media_init_hw_scaling(mp_media_t *m) {
 		return -1;
 	}
 
-	// GPU Scaler
-	snprintf(args, sizeof(args), "w=%d:h=%d:format=%s:interp_algo=linear", m->v.decoder->width, m->v.decoder->height, pix_fmt_str);
-	m->hwscale.scalenpp_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.buffersrc_ctx, "scale_npp", "scale_npp", args);
-	if (m->hwscale.scalenpp_ctx == NULL) {
-		PRINT_DEBUG("AddFilter scalenpp_ctx failed");
-		return -1;
-	}
-
 	// Download from GPU
-	m->hwscale.hwdownload_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.scalenpp_ctx, "hwdownload", "hwdownload", "");
+	m->hwscale.hwdownload_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.buffersrc_ctx, "hwdownload", "hwdownload", "");
 	if (m->hwscale.hwdownload_ctx == NULL) {
 		PRINT_DEBUG("AddFilter hwdownload_ctx failed");
 		return -1;
 	}
 
+	// video format
+	m->hwscale.vformat_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.hwdownload_ctx, "format", "vformat", "pix_fmts=nv12");
+	if (m->hwscale.vformat_ctx == NULL) {
+		PRINT_DEBUG("AddFilter vformat_ctx failed");
+		return -1;
+	}
+
 	// buffer video sink: to terminate the filter chain
-	m->hwscale.buffersink_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.hwdownload_ctx, "buffersink", "out", "");
+	m->hwscale.buffersink_ctx = AddFilter(m->hwscale.filter_graph, m->hwscale.vformat_ctx, "buffersink", "out", "");
 	if (m->hwscale.buffersink_ctx == NULL) {
 		PRINT_DEBUG("AddFilter buffersink_ctx failed");
 		return -1;
@@ -518,6 +517,12 @@ static void mp_media_next_video(mp_media_t *m, bool preload)
 				frame->data[i] = f->data[i];
 				frame->linesize[i] = abs(f->linesize[i]);
 			}
+
+			m->scale_format = f->format;
+			// TODO
+			// m->force_range
+			// m->cur_space
+			// m->cur_range
 		}
 	} else {
 		flip = f->linesize[0] < 0 && f->linesize[1] == 0;
@@ -542,6 +547,11 @@ static void mp_media_next_video(mp_media_t *m, bool preload)
 	    new_range  != m->cur_range) {
 		bool success;
 
+		PRINT_DEBUG("frame->format=%d vs new_format=%d, m->cur_space=%d vs new_space=%d, m->cur_range=%d vs new_range=%d",
+			frame->format, new_format,
+			m->cur_space, new_space,
+			m->cur_range, new_range);
+
 		frame->format = new_format;
 		frame->full_range = new_range == VIDEO_RANGE_FULL;
 
@@ -558,13 +568,13 @@ static void mp_media_next_video(mp_media_t *m, bool preload)
 
 		if (!success) {
 			frame->format = VIDEO_FORMAT_NONE;
-			PRINT_DEBUG("video_format_get_parameters failed\n");
+			PRINT_DEBUG("video_format_get_parameters failed");
 			return;
 		}
 	}
 
 	if (frame->format == VIDEO_FORMAT_NONE) {
-		PRINT_DEBUG("frame->format == VIDEO_FORMAT_NONE\n");
+		PRINT_DEBUG("frame->format == VIDEO_FORMAT_NONE");
 		return;
 	}
 
@@ -895,12 +905,6 @@ bool mp_media_init(mp_media_t *media, const struct mp_media_info *info)
 	memset(&media->hwscale, 0, sizeof(media->hwscale));
 	media->hwscale.hw_pix_fmt = AV_PIX_FMT_NONE;
 
-	media->hwscale.fd = fopen("ffdump.yuv", "w+");
-	if(!media->hwscale.fd) {
-		PRINT_DEBUG("couldn't open ffdump.yuv");
-		return false;
-	}
-
 	if (!info->is_local_file || media->speed < 1 || media->speed > 200)
 		media->speed = 100;
 
@@ -951,7 +955,6 @@ void mp_media_free(mp_media_t *media)
 	sws_freeContext(media->swscale);
 	avfilter_graph_free(&media->hwscale.filter_graph);
 	av_frame_unref(media->hwscale.filt_frame);
-	fclose(media->hwscale.fd);
 	av_freep(&media->scale_pic[0]);
 	bfree(media->path);
 	bfree(media->format_name);
