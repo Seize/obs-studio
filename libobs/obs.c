@@ -696,6 +696,7 @@ static const char *obs_signals[] = {
 	"void source_remove(ptr source)",
 	"void source_save(ptr source)",
 	"void source_load(ptr source)",
+	"void source_playing(ptr source)",
 	"void source_activate(ptr source)",
 	"void source_deactivate(ptr source)",
 	"void source_show(ptr source)",

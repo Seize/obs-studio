@@ -56,6 +56,7 @@ static const char *source_signals[] = {
 	"void remove(ptr source)",
 	"void save(ptr source)",
 	"void load(ptr source)",
+	"void playing(ptr source)",
 	"void activate(ptr source)",
 	"void deactivate(ptr source)",
 	"void show(ptr source)",
@@ -828,6 +829,15 @@ void obs_source_update_properties(obs_source_t *source)
 		return;
 
 	obs_source_dosignal(source, NULL, "update_properties");
+}
+
+void obs_source_playing(obs_source_t *source)
+{
+	if (!obs_source_valid(source, "obs_source_playing")) {
+		return;
+	}
+
+	obs_source_dosignal(source, NULL, "playing");
 }
 
 void obs_source_send_mouse_click(obs_source_t *source,

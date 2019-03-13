@@ -1135,6 +1135,9 @@ EXPORT void obs_source_output_audio(obs_source_t *source,
 /** Signal an update to any currently used properties via 'update_properties' */
 EXPORT void obs_source_update_properties(obs_source_t *source);
 
+/** Signal that the source is sending audio and/or video frames **/
+EXPORT void obs_source_playing(obs_source_t *source);
+
 /** Gets the current async video frame */
 EXPORT struct obs_source_frame *obs_source_get_frame(obs_source_t *source);
 

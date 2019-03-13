@@ -70,6 +70,9 @@ struct ffmpeg_source {
 	pthread_mutex_t mutex;
 	struct timespec last_a;
 	struct timespec last_v;
+	struct timespec last_a_print;
+	struct timespec last_v_print;
+	bool sent_playing;
 };
 
 static bool is_local_file_modified(obs_properties_t *props,
@@ -206,6 +209,26 @@ static obs_properties_t *ffmpeg_source_getproperties(void *data)
 	return props;
 }
 
+static uint32_t ffmpeg_source_getwidth(void *data)
+{
+	struct ffmpeg_source *s = data;
+	uint32_t width = 0;
+	if(s->media.v.decoder) {
+		width = s->media.v.decoder->width;
+	}
+	return width;
+}
+
+static uint32_t ffmpeg_source_getheight(void *data)
+{
+	struct ffmpeg_source *s = data;
+	uint32_t height = 0;
+	if(s->media.v.decoder) {
+		height = s->media.v.decoder->height;
+	}
+	return height;
+}
+
 static void dump_source_info(struct ffmpeg_source *s, const char *input,
 		const char *input_format)
 {
@@ -297,37 +320,54 @@ static void ffmpeg_source_open(struct ffmpeg_source *s)
 	}
 }
 
+static bool check_stream_timeout(char* stream_name, struct timespec curr_time, struct timespec last, struct timespec* last_print)
+{
+	uint64_t delta_us;
+	uint64_t delta_us_print;
+	bool timeout = false;
+
+	delta_us = (curr_time.tv_sec - last.tv_sec) * 1000000 + (curr_time.tv_nsec - last.tv_nsec) / 1000;
+	if(delta_us > 1000000) {
+		timeout = true;
+	}
+
+	delta_us_print = (last.tv_sec - last_print->tv_sec) * 1000000 + (last.tv_nsec - last_print->tv_nsec) / 1000;
+	if(delta_us_print > 1000000) {
+		if(timeout) {
+			PRINT_DEBUG("%s stream timeout", stream_name);
+		} else {
+			PRINT_DEBUG("%s stream alive", stream_name);
+		}
+
+		last_print->tv_sec = last.tv_sec;
+		last_print->tv_nsec = last.tv_nsec;
+	}
+
+	return timeout;
+}
+
 static void ffmpeg_source_tick(void *data, float seconds)
 {
 	UNUSED_PARAMETER(seconds);
-	uint64_t delta_us_audio, delta_us_video;
-	struct timespec curr_time;
-	struct timespec last_v;
-	struct timespec last_a;
-	bool audio_timeout = false;
-	bool video_timeout = false;
-
 	struct ffmpeg_source *s = data;
+	struct timespec curr_time;
+	bool audio_timeout = true;
+	bool video_timeout = true;
 
 	clock_gettime(CLOCK_MONOTONIC_RAW, &curr_time);
 
 	pthread_mutex_lock(&s->mutex);
-	last_v.tv_sec = s->last_v.tv_sec;
-	last_v.tv_nsec = s->last_v.tv_nsec;
-	last_a.tv_sec = s->last_a.tv_sec;
-	last_a.tv_nsec = s->last_a.tv_nsec;
+	if(s->media.has_video) {
+		video_timeout = check_stream_timeout("video", curr_time, s->last_v, &s->last_v_print);
+	}
+	if(s->media.has_audio) {
+		audio_timeout = check_stream_timeout("audio", curr_time, s->last_a, &s->last_a_print);
+	}
 	pthread_mutex_unlock(&s->mutex);
 
-	delta_us_video = (curr_time.tv_sec - last_v.tv_sec) * 1000000 + (curr_time.tv_nsec - last_v.tv_nsec) / 1000;
-	if(s->media.has_video /*s->media.v.decoder*/ && delta_us_video > 1000000) {
-		PRINT_DEBUG("video stream timeout");
-		video_timeout = true;
-	}
-
-	delta_us_audio = (curr_time.tv_sec - last_a.tv_sec) * 1000000 + (curr_time.tv_nsec - last_a.tv_nsec) / 1000;
-	if(s->media.has_audio /*s->media.a.decoder*/ && delta_us_audio > 1000000) {
-		PRINT_DEBUG("audio stream timeout");
-		audio_timeout = true;
+	if(!s->sent_playing && !audio_timeout && !video_timeout) {
+		obs_source_playing(s->source);
+		s->sent_playing = true;
 	}
 
 	if (s->destroy_media) {
@@ -509,6 +549,9 @@ static void *ffmpeg_source_create(obs_data_t *settings, obs_source_t *source)
 	pthread_mutex_init_value(&s->mutex);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v_print);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a_print);
+	s->sent_playing = false;
 
 	ffmpeg_source_update(s, settings);
 	return s;
@@ -567,6 +610,8 @@ struct obs_source_info ffmpeg_source = {
 	.destroy        = ffmpeg_source_destroy,
 	.get_defaults   = ffmpeg_source_defaults,
 	.get_properties = ffmpeg_source_getproperties,
+	.get_width      = ffmpeg_source_getwidth,
+	.get_height     = ffmpeg_source_getheight,
 	.activate       = ffmpeg_source_activate,
 	.deactivate     = ffmpeg_source_deactivate,
 	.video_tick     = ffmpeg_source_tick,
