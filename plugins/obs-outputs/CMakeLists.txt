@@ -151,6 +151,7 @@ set(obs-outputs_SOURCES
 	null-output.c
 	rtmp-stream.c
 	rtmp-windows.c
+	rtmp-server-output.c
 	flv-output.c
 	flv-mux.c
 	net-if.c)
