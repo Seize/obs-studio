@@ -156,7 +156,7 @@ static void *libfdk_create(obs_data_t *settings, obs_encoder_t *encoder)
 	CHECK_LIBFDK(aacEncoder_SetParam(enc->fdkhandle, AACENC_CHANNELORDER, 1));
 	CHECK_LIBFDK(aacEncoder_SetParam(enc->fdkhandle, AACENC_BITRATEMODE, 0));
 	CHECK_LIBFDK(aacEncoder_SetParam(enc->fdkhandle, AACENC_BITRATE, bitrate));
-	CHECK_LIBFDK(aacEncoder_SetParam(enc->fdkhandle, AACENC_TRANSMUX, 0));
+	CHECK_LIBFDK(aacEncoder_SetParam(enc->fdkhandle, AACENC_TRANSMUX, 2)); // Force ADTS
 	CHECK_LIBFDK(aacEncoder_SetParam(enc->fdkhandle, AACENC_AFTERBURNER,
 	                                 afterburner));
 
