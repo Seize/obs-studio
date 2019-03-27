@@ -1,0 +1,1 @@
+execute_process(COMMAND sh ${CMAKE_CURRENT_LIST_DIR}/build.sh ${CMAKE_CURRENT_LIST_DIR})

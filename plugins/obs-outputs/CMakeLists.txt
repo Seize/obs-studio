@@ -156,6 +156,20 @@ set(obs-outputs_SOURCES
 	flv-mux.c
 	net-if.c)
 
+include_directories(
+	${CMAKE_CURRENT_LIST_DIR}/../../deps/rtmp-server/sdk/include/
+	${CMAKE_CURRENT_LIST_DIR}/../../deps/rtmp-server/media-server/librtmp/include
+	${CMAKE_CURRENT_LIST_DIR}/../../deps/rtmp-server/media-server/libflv/include
+)
+
+link_directories(${CMAKE_CURRENT_LIST_DIR}/../../build/deps/rtmp-server)
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fno-sanitize=all")
+# set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -fno-omit-frame-pointer -fno-sanitize=all")
+# set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fno-omit-frame-pointer -fno-sanitize=all")
+# set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -fno-omit-frame-pointer -fno-sanitize=all")
+# set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fno-omit-frame-pointer -fno-sanitize=all")
+# set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -fno-omit-frame-pointer -fno-sanitize=all")
+
 add_library(obs-outputs MODULE
 	${ftl_SOURCES}
 	${ftl_HEADERS}
@@ -168,6 +182,8 @@ target_link_libraries(obs-outputs
 	${LIBMBEDTLS_LIBRARIES}
 	${ZLIB_LIBRARIES}
 	${ftl_IMPORTS}
-	${obs-outputs_PLATFORM_DEPS})
+	${obs-outputs_PLATFORM_DEPS}
+	rtmp
+    flv)
 
 install_obs_plugin_with_data(obs-outputs data)
