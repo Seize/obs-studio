@@ -49,10 +49,6 @@ int mpeg4_aac_adts_load(const uint8_t* data, size_t bytes, struct mpeg4_aac_t* a
 	aac->channels = aac->channel_configuration;
 	aac->sampling_frequency = mpeg4_aac_audio_frequency_to(aac->sampling_frequency_index);
 
-	printf("ADTS: profile=%u, sr idx=%u, ch config=%u, channels=%u, sr=%u\n",
-		aac->profile, aac->sampling_frequency_index, aac->channel_configuration,
-		aac->channels, aac->sampling_frequency);
-
 	if (0 == aac->channel_configuration)
 		return mpeg4_aac_adts_pce_load(data, bytes, aac);
 	return 7;

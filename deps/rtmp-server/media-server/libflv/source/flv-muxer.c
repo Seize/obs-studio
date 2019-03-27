@@ -126,12 +126,6 @@ int flv_muxer_aac(struct flv_muxer_t* flv, const void* data, size_t bytes, uint3
 	}
 
 	/* ADTS */
-	printf("ADTS and more: ");
-	for(int i=0; i<8; i++) {
-		printf("%02x ");
-	}
-	printf("\n");
-
 	n = mpeg4_aac_adts_load(data, bytes, &flv->aac);
 	if (n <= 0)
 		return -1; // invalid data
