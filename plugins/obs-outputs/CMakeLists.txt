@@ -144,6 +144,7 @@ set(obs-outputs_HEADERS
 	obs-output-ver.h
 	rtmp-helpers.h
 	rtmp-stream.h
+	rtmp-server-impl.h
 	net-if.h
 	flv-mux.h)
 set(obs-outputs_SOURCES
@@ -152,6 +153,7 @@ set(obs-outputs_SOURCES
 	rtmp-stream.c
 	rtmp-windows.c
 	rtmp-server-output.c
+	rtmp-server-impl.c
 	flv-output.c
 	flv-mux.c
 	net-if.c)
@@ -163,12 +165,6 @@ include_directories(
 )
 
 link_directories(${CMAKE_CURRENT_LIST_DIR}/../../build/deps/rtmp-server)
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fno-sanitize=all")
-# set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -fno-omit-frame-pointer -fno-sanitize=all")
-# set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fno-omit-frame-pointer -fno-sanitize=all")
-# set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -fno-omit-frame-pointer -fno-sanitize=all")
-# set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fno-omit-frame-pointer -fno-sanitize=all")
-# set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -fno-omit-frame-pointer -fno-sanitize=all")
 
 add_library(obs-outputs MODULE
 	${ftl_SOURCES}
