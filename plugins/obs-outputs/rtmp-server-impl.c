@@ -27,7 +27,7 @@ queue_buf_t* QueueGetWriteBuffer(queue_t* q) {
 	buf = &q->buffers[q->wr_idx];
 	idx = q->wr_idx;
 
-	if(q->reader_init && q->wr_idx+1 == q->rd_idx) {
+	if(q->wr_idx+1 == q->rd_idx) {
 		printf("%s: drop old buffer at id=%d\n", __func__, q->rd_idx);
 		unsigned short rd_idx;
 		QueuePopFrontInternal(q, &rd_idx);
@@ -38,8 +38,6 @@ queue_buf_t* QueueGetWriteBuffer(queue_t* q) {
 		q->wr_idx = 0;
 	}
 	pthread_mutex_unlock(&q->mutex);
-
-	// printf("%s: got buffer %d\n", __func__, idx);
 	return buf;
 }
 
@@ -78,18 +76,7 @@ queue_buf_t* QueuePopFront(queue_t* q) {
 	buf = QueuePopFrontInternal(q, &idx);
 	pthread_mutex_unlock(&q->mutex);
 
-	if(buf == NULL) {
-		// printf("%s: no buffer yet\n", __func__);
-	} else {
-		// printf("%s: read buffer %d\n", __func__, idx);
-	}
 	return buf;
-}
-
-int QueueStopRead(queue_t* q) {
-	printf("%s\n", __func__);
-	q->reader_init = false;
-	return 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -102,8 +89,6 @@ void ServerInit(server_t* s,
 		int (*onseek_cb)(void* param, uint32_t ms),
 		int (*ongetduration_cb)(void* param, const char* app, const char* stream, double* duration)
 		) {
-	printf("%s\n", __func__);
-
 	memset(&s->handler, 0, sizeof(s->handler));
 	s->handler.send = send_cb;
 	s->handler.onplay = onplay_cb;
@@ -120,74 +105,54 @@ void ServerInit(server_t* s,
 	s->quitServe = false;
 	s->quitOutput = false;
 	QueueInit(&s->queue);
-	printf("%s ok\n", __func__);
 }
 
 int ServerCreate(server_t* s, int port) {
-	printf("%s\n", __func__);
 	socket_init();
 
 	printf("%s: socket_tcp_listen\n", __func__);
 	s->s = socket_tcp_listen(NULL, port, SOMAXCONN);
 	if(s->s == -1) {
-		printf("%s: socket_tcp_listen failed\n", __func__);
 		return s->s;
 	}
-
-	printf("%s ok\n", __func__);
 	return 0;
 }
 
 int ServerDestroy(server_t* s) {
-	printf("%s\n", __func__);
 	rtmp_server_destroy(s->s_rtmp);
 	flv_muxer_destroy(s->muxer);
 	socket_close(s->c);
 	socket_close(s->s);
 	socket_cleanup();
 	QueueDestroy(&s->queue);
-	printf("%s ok\n", __func__);
 	return 0;
 }
 
 int ServerStart(server_t* s) {
-	printf("%s\n", __func__);
 	thread_create(&s->threadListener, listener_thread, s);
-	printf("%s ok\n", __func__);
 	return 0;
 }
 
 int ServerStop(server_t* s) {
-	printf("%s\n", __func__);
-	int ret = QueueStopRead(&s->queue);
-	if(ret != 0) {
-		printf("%s: QueueStopRead failed, ret=%d\n", __func__, ret);
-	}
 	s->quitOutput = true;
 	thread_destroy(s->threadOutput);
 	s->quitServe = true;
 	thread_destroy(s->threadListener);
-	printf("%s ok\n", __func__);
 	return 0;
 }
 
 int ServerServe(server_t* s) {
-	printf("%s\n", __func__);
 	int ret;
 	unsigned char packet[2 * 1024 * 1024];
 	while (!s->quitServe && (ret = socket_recv(s->c, packet, sizeof(packet), 0)) > 0) {
 		ret = rtmp_server_input(s->s_rtmp, packet, ret);
 	}
 	s->quitOutput = true;
-	printf("%s: exit loop\n", __func__);
-	printf("%s ok\n", __func__);
 	return 0;
 }
 
 int ServerCreateOutputThread(server_t* s) {
-	printf("%s\n", __func__);
 	thread_create(&s->threadOutput, output_thread, s);
-	printf("%s ok\n", __func__);
 	return 0;
 }
 
@@ -221,7 +186,6 @@ int ServerSendPkt(server_t* s, unsigned char* data, size_t size, int type, int64
 ////////////////////////////////////////////////////////////////////////////////
 
 int STDCALL listener_thread(void* param) {
-	printf("%s: start\n", __func__);
 
 	struct sockaddr_storage ss;
 	socklen_t n;
@@ -233,16 +197,15 @@ int STDCALL listener_thread(void* param) {
 
 	// TODO don't exit on client quit
 	// TODO manage multiple clients
-	while(!s->quitServe)
-	{
-		printf("%s: socket_accept\n", __func__);
+	while(!s->quitServe) {
 		s->c = socket_accept(s->s, &ss, &n);
 		if(s->c == -1) {
 			printf("%s: socket_accept failed\n", __func__);
 			return s->c;
 		}
 
-		printf("%s: rtmp_server_create\n", __func__);
+		printf("%s: socket_accept\n", __func__);
+
 		s->s_rtmp = rtmp_server_create(&s->c, &s->handler);
 		if(s->s_rtmp == NULL) {
 			printf("%s: rtmp_server_create failed\n", __func__);
@@ -252,13 +215,11 @@ int STDCALL listener_thread(void* param) {
 		ServerServe(s);
 		printf("%s: socket closed\n", __func__);
 	}
-	printf("%s: exit thread\n", __func__);
 	return 0;
 }
 
 int STDCALL output_thread(void* param) {
 	int ret;
-	printf("%s: start\n", __func__);
 
 	server_t* s = (server_t*) param;
 	if(s == NULL) {
@@ -290,8 +251,6 @@ int STDCALL output_thread(void* param) {
 		}
 	}
 	s->quitOutput = false;
-
-	printf("%s: exit thread\n", __func__);
 	return 0;
 }
 
