@@ -41,7 +41,6 @@ void QueueDestroy(queue_t* q);
 queue_buf_t* QueueGetWriteBuffer(queue_t* q);
 queue_buf_t* QueuePopFrontInternal(queue_t* q, unsigned short* idx);
 queue_buf_t* QueuePopFront(queue_t* q);
-int QueueStopRead(queue_t* q);
 
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////

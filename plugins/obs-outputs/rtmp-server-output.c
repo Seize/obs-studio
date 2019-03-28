@@ -40,7 +40,6 @@ static const char *rtmp_server_output_getname(void *unused)
 static void *rtmp_server_output_create(obs_data_t *settings, obs_output_t *output)
 {
 	struct rtmp_server_output *context = bzalloc(sizeof(*context));
-	printf("%s\n", __func__);
 	context->output = output;
 	int ret = ServerCreate(&rtmp_server_output_instance, RTMP_PORT);
 	if(ret) {
@@ -52,13 +51,11 @@ static void *rtmp_server_output_create(obs_data_t *settings, obs_output_t *outpu
 		&rtmp_server_send, &rtmp_server_onplay, &rtmp_server_onpause, &rtmp_server_onseek, &rtmp_server_ongetduration
 	);
 	UNUSED_PARAMETER(settings);
-	printf("%s ok\n", __func__);
 	return context;
 }
 
 static void rtmp_server_output_destroy(void *data)
 {
-	printf("%s\n", __func__);
 	struct rtmp_server_output *context = data;
 	if (context->stop_thread_active)
 		pthread_join(context->stop_thread, NULL);
@@ -67,12 +64,10 @@ static void rtmp_server_output_destroy(void *data)
 		printf("%s: server Destroy failed: ret=%d\n", __func__, ret);
 	}
 	bfree(context);
-	printf("%s ok\n", __func__);
 }
 
 static bool rtmp_server_output_start(void *data)
 {
-	printf("%s\n", __func__);
 	struct rtmp_server_output *context = data;
 
 	if (!obs_output_can_begin_data_capture(context->output, 0))
@@ -89,7 +84,6 @@ static bool rtmp_server_output_start(void *data)
 		return ret;
 	}
 	obs_output_begin_data_capture(context->output, 0);
-	printf("%s ok\n", __func__);
 	return true;
 }
 
@@ -107,13 +101,11 @@ static void *stop_thread(void *data)
 
 static void rtmp_server_output_stop(void *data, uint64_t ts)
 {
-	printf("%s\n", __func__);
 	struct rtmp_server_output *context = data;
 	UNUSED_PARAMETER(ts);
 
 	context->stop_thread_active = pthread_create(&context->stop_thread,
 			NULL, stop_thread, data) == 0;
-	printf("%s ok\n", __func__);
 }
 
 static void rtmp_server_output_data(void *data, struct encoder_packet *packet)
