@@ -141,10 +141,18 @@ static void rtmp_server_output_data(void *data, struct encoder_packet *packet)
 		return;
 	}
 
+	int64_t pts_ms = (1000 * packet->pts * ((int64_t)packet->timebase_num)) / ((int64_t)packet->timebase_den);
+	int64_t dts_ms = (1000 * packet->dts * ((int64_t)packet->timebase_num)) / ((int64_t)packet->timebase_den);
+	if(packet->type == OBS_ENCODER_VIDEO) {
+		// TODO why though
+		pts_ms /= 1000;
+		dts_ms /= 1000;
+	}
+
 	memcpy(buf->data, packet->data, packet->size); // TODO noooo :(
 	buf->size = packet->size;
-	buf->pts = packet->pts;
-	buf->dts = packet->dts;
+	buf->pts = pts_ms;
+	buf->dts = dts_ms;
 	buf->readable = true;
 }
 

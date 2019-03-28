@@ -22,8 +22,8 @@
 typedef struct queue_buf {
 	unsigned char* data;
 	size_t size;
-	uint32_t pts;
-	uint32_t dts;
+	int64_t pts;
+	int64_t dts;
 	int type;
 	bool readable;
 } queue_buf_t;
@@ -75,14 +75,14 @@ int ServerServe(server_t* s);
 int ServerCreateOutputThread(server_t* s);
 queue_buf_t* ServerGetBuffer(server_t* s);
 queue_buf_t* ServerPopBuffer(server_t* s);
-int ServerSendPkt(server_t* s, unsigned char* data, size_t size, int type, uint32_t dts);
+int ServerSendPkt(server_t* s, unsigned char* data, size_t size, int type, int64_t dts);
 
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
 int STDCALL listener_thread(void* param);
 int STDCALL output_thread(void* param);
-int flv_handler(void* param, int type, const void* data, size_t bytes, uint32_t dts);
+int flv_handler(void* param, int type, const void* data, size_t bytes, int64_t dts);
 int rtmp_server_send(void* param, const void* header, size_t len, const void* data, size_t bytes);
 int rtmp_server_onplay(void* param, const char* app, const char* stream, double start, double duration, uint8_t reset);
 int rtmp_server_onpause(void* param, int pause, uint32_t ms);

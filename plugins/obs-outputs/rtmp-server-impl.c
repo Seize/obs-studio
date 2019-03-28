@@ -199,7 +199,7 @@ queue_buf_t* ServerPopBuffer(server_t* s) {
 	return QueuePopFront(&s->queue);
 }
 
-int ServerSendPkt(server_t* s, unsigned char* data, size_t size, int type, uint32_t dts) {
+int ServerSendPkt(server_t* s, unsigned char* data, size_t size, int type, int64_t dts) {
 	if(size > BUF_SIZE) {
 		printf("%s: buffer too large\n", __func__);
 		return -1;
@@ -282,7 +282,7 @@ int STDCALL output_thread(void* param) {
 			// TODO flv_muxer_h264
 		}
 		else {
-			printf("%s: unknown type of buffer ! buf=%p, type=%d, size=%zu, pts=%u\n", __func__, buf->data, buf->type, buf->size, buf->pts);
+			printf("%s: unknown type of buffer ! buf=%p, type=%d, size=%zu, pts=%ld\n", __func__, buf->data, buf->type, buf->size, buf->pts);
 		}
 
 		if(ret != 0) {
@@ -295,7 +295,7 @@ int STDCALL output_thread(void* param) {
 	return 0;
 }
 
-int flv_handler(void* param, int type, const void* data, size_t bytes, uint32_t dts) {
+int flv_handler(void* param, int type, const void* data, size_t bytes, int64_t dts) {
 	return ServerSendPkt((server_t*) param, (unsigned int*)data, bytes, type, dts);
 }
 
