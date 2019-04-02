@@ -52,8 +52,8 @@ typedef struct server {
 	queue_t queue;
 	pthread_t threadListener;
 	pthread_t threadOutput;
-	socket_t s;
-	socket_t c;
+	socket_t socket;
+	socket_t client_socket;
 	bool quitServe;
 	bool quitOutput;
 } server_t;

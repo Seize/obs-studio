@@ -111,9 +111,9 @@ int ServerCreate(server_t* s, int port) {
 	socket_init();
 
 	printf("%s: socket_tcp_listen\n", __func__);
-	s->s = socket_tcp_listen(NULL, port, SOMAXCONN);
-	if(s->s == -1) {
-		return s->s;
+	s->socket = socket_tcp_listen(NULL, port, SOMAXCONN);
+	if(s->socket == -1) {
+		return s->socket;
 	}
 	return 0;
 }
@@ -121,8 +121,8 @@ int ServerCreate(server_t* s, int port) {
 int ServerDestroy(server_t* s) {
 	rtmp_server_destroy(s->s_rtmp);
 	flv_muxer_destroy(s->muxer);
-	socket_close(s->c);
-	socket_close(s->s);
+	socket_close(s->client_socket);
+	socket_close(s->socket);
 	socket_cleanup();
 	QueueDestroy(&s->queue);
 	return 0;
@@ -144,7 +144,7 @@ int ServerStop(server_t* s) {
 int ServerServe(server_t* s) {
 	int ret;
 	unsigned char packet[2 * 1024 * 1024];
-	while (!s->quitServe && (ret = socket_recv(s->c, packet, sizeof(packet), 0)) > 0) {
+	while (!s->quitServe && (ret = socket_recv(s->client_socket, packet, sizeof(packet), 0)) > 0) {
 		ret = rtmp_server_input(s->s_rtmp, packet, ret);
 	}
 	s->quitOutput = true;
@@ -198,15 +198,15 @@ int STDCALL listener_thread(void* param) {
 	// TODO don't exit on client quit
 	// TODO manage multiple clients
 	while(!s->quitServe) {
-		s->c = socket_accept(s->s, &ss, &n);
-		if(s->c == -1) {
+		s->client_socket = socket_accept(s->socket, &ss, &n);
+		if(s->client_socket == -1) {
 			printf("%s: socket_accept failed\n", __func__);
-			return s->c;
+			return s->client_socket;
 		}
 
 		printf("%s: socket_accept\n", __func__);
 
-		s->s_rtmp = rtmp_server_create(&s->c, &s->handler);
+		s->s_rtmp = rtmp_server_create(&s->client_socket, &s->handler);
 		if(s->s_rtmp == NULL) {
 			printf("%s: rtmp_server_create failed\n", __func__);
 			return 1;
