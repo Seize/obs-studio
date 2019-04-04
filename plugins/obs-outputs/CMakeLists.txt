@@ -180,6 +180,6 @@ target_link_libraries(obs-outputs
 	${ftl_IMPORTS}
 	${obs-outputs_PLATFORM_DEPS}
 	rtmp
-    flv)
+	flv)
 
 install_obs_plugin_with_data(obs-outputs data)
