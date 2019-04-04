@@ -131,7 +131,7 @@ static void rtmp_server_output_data(void *data, struct encoder_packet *packet)
 	int64_t pts_ms = (1000 * packet->pts * ((int64_t)packet->timebase_num)) / ((int64_t)packet->timebase_den);
 	int64_t dts_ms = (1000 * packet->dts * ((int64_t)packet->timebase_num)) / ((int64_t)packet->timebase_den);
 
-		// TODO why though
+	// TODO why though
 	if(packet->type == OBS_ENCODER_VIDEO) {
 		pts_ms /= 1000;
 		dts_ms /= 1000;

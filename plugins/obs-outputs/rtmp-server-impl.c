@@ -28,13 +28,7 @@ queue_buf_t* QueueReaderRead(queue_reader_t* q) {
 		// Not ready
 		// rstrace("not ready");
 	} else {
-		// TODO for now, we must copy output packets
-		// to make sure they are not overwritten during use
-		// To solve this, a buffer should be allocated in
-		// QueueWriteBuffer (the copy is already mandatory there,
-		// because the input packet come from a single buffer
-		// in the encoder). Then, they are freed after being passed
-		// to the flv muxer.
+		// We must copy output packets because there might be multiple readers
 		buf = malloc(sizeof(queue_buf_t));
 		buf->size = q->curr_buf->size;
 		buf->pts = q->curr_buf->pts;
@@ -272,6 +266,8 @@ int STDCALL OutputSendPktThread(void* param) {
 				rserror("error while muxing pkt, ret=%d", ret);
 			}
 		}
+		free(buf->data);
+		free(buf);
 	}
 	o->quitSendPktThread = false;
 	pthread_mutex_unlock(&o->mutex);
