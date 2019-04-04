@@ -1,3 +1,4 @@
+#include <sys/types.h>
 #include "rtmp-server-impl.h"
 
 extern server_t rtmp_server_output_instance;
@@ -432,7 +433,7 @@ int rtmp_server_send(void* param, const void* header, size_t len, const void* da
 	socket_bufvec_t vec[2];
 	socket_setbufvec(vec, 0, (void*)header, len);
 	socket_setbufvec(vec, 1, (void*)data, bytes);
-	return socket_send_v_all_by_time(*socket, vec, bytes > 0 ? 2 : 1, 0, 20000);
+	return socket_send_v_all_by_time(*socket, vec, bytes > 0 ? 2 : 1, MSG_NOSIGNAL, 20000);
 }
 
 int rtmp_server_onplay(void* param, const char* app, const char* stream, double start, double duration, uint8_t reset) {
