@@ -41,15 +41,14 @@ static void *rtmp_server_output_create(obs_data_t *settings, obs_output_t *outpu
 {
 	struct rtmp_server_output *context = bzalloc(sizeof(*context));
 	context->output = output;
-	int ret = ServerCreate(&rtmp_server_output_instance, RTMP_PORT);
+	int ret = ServerCreate(&rtmp_server_output_instance, RTMP_PORT,
+		&rtmp_server_send, &rtmp_server_onplay, &rtmp_server_onpause,
+		&rtmp_server_onseek, &rtmp_server_ongetduration);
 	if(ret) {
-		printf("%s: server Create failed: ret=%d\n", __func__, ret);
+		rserror("server Create failed: ret=%d", ret);
 		return context;
 	}
 
-	ServerInit(&rtmp_server_output_instance,
-		&rtmp_server_send, &rtmp_server_onplay, &rtmp_server_onpause, &rtmp_server_onseek, &rtmp_server_ongetduration
-	);
 	UNUSED_PARAMETER(settings);
 	return context;
 }
@@ -61,7 +60,7 @@ static void rtmp_server_output_destroy(void *data)
 		pthread_join(context->stop_thread, NULL);
 	int ret = ServerDestroy(&rtmp_server_output_instance);
 	if(ret) {
-		printf("%s: server Destroy failed: ret=%d\n", __func__, ret);
+		rserror("server Destroy failed: ret=%d", ret);
 	}
 	bfree(context);
 }
@@ -80,7 +79,7 @@ static bool rtmp_server_output_start(void *data)
 
 	int ret = ServerStart(&rtmp_server_output_instance);
 	if(ret) {
-		printf("%s: server Start failed: ret=%d\n", __func__, ret);
+		rserror("ServerStart failed: ret=%d", ret);
 		return ret;
 	}
 	obs_output_begin_data_capture(context->output, 0);
@@ -93,7 +92,7 @@ static void *stop_thread(void *data)
 	obs_output_end_data_capture(context->output);
 	int ret = ServerStop(&rtmp_server_output_instance);
 	if(ret) {
-		printf("%s: server Stop failed: ret=%d\n", __func__, ret);
+		rserror("ServerStop failed: ret=%d", ret);
 	}
 	context->stop_thread_active = false;
 	return NULL;
@@ -112,40 +111,40 @@ static void rtmp_server_output_data(void *data, struct encoder_packet *packet)
 {
 	UNUSED_PARAMETER(data);
 	UNUSED_PARAMETER(packet);
-
-	queue_buf_t* buf = ServerGetBuffer(&rtmp_server_output_instance);
-	if(buf == NULL) {
-		printf("%s: error while getting buffer\n", __func__);
-		return;
-	}
+	queue_buf_t buf;
 
 	if(packet->size > BUF_SIZE) {
-		printf("%s: packet too large\n", __func__);
+		rserror("packet too large");
 		return;
 	}
 
 	if(packet->type == OBS_ENCODER_AUDIO) {
-		buf->type = FLV_TYPE_AUDIO;
+		buf.type = FLV_TYPE_AUDIO;
 	} else if (packet->type == OBS_ENCODER_VIDEO) {
-		buf->type = FLV_TYPE_VIDEO;
+		buf.type = FLV_TYPE_VIDEO;
 	} else {
-		printf("%s: unknown packet type %d\n", __func__, packet->type);
+		rserror("unknown packet type %d", packet->type);
 		return;
 	}
 
+	// FLV requires ms timestamps
 	int64_t pts_ms = (1000 * packet->pts * ((int64_t)packet->timebase_num)) / ((int64_t)packet->timebase_den);
 	int64_t dts_ms = (1000 * packet->dts * ((int64_t)packet->timebase_num)) / ((int64_t)packet->timebase_den);
-	if(packet->type == OBS_ENCODER_VIDEO) {
+
 		// TODO why though
+	if(packet->type == OBS_ENCODER_VIDEO) {
 		pts_ms /= 1000;
 		dts_ms /= 1000;
 	}
 
-	memcpy(buf->data, packet->data, packet->size); // TODO noooo :(
-	buf->size = packet->size;
-	buf->pts = pts_ms;
-	buf->dts = dts_ms;
-	buf->readable = true;
+	buf.data = packet->data;
+	buf.size = packet->size;
+	buf.pts = pts_ms;
+	buf.dts = dts_ms;
+	buf.next = NULL;
+
+	// Write the buffer and memcpy the data
+	QueueWriteBuffer(&rtmp_server_output_instance.queue, &buf, true);
 }
 
 struct obs_output_info rtmp_server_output_info = {
