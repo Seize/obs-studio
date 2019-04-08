@@ -196,6 +196,9 @@ struct obs_source_info {
 	 */
 	void (*destroy)(void *data);
 
+	/** Returns the audio and video properties of the input */
+	struct obs_source_av_props (*get_av_props)(void *data);
+
 	/** Returns the width of the source.  Required if this is an input
 	 * source and has non-async video */
 	uint32_t (*get_width)(void *data);

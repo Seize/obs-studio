@@ -246,6 +246,20 @@ struct obs_cmdline_args {
 	char **argv;
 };
 
+/**
+ * Source audio and video input properties structure. Used with
+ * obs_source_get_av_props to give information when the source is playing. */
+struct obs_source_av_props {
+	bool                a_valid;
+	bool                v_valid;
+	uint32_t            width;
+	uint32_t            height;
+	enum video_format   v_format;
+	enum speaker_layout speakers;
+	enum audio_format   a_format;
+	uint32_t            samples_per_sec;
+};
+
 /* ------------------------------------------------------------------------- */
 /* OBS context */
 
@@ -868,6 +882,9 @@ EXPORT void obs_source_update(obs_source_t *source, obs_data_t *settings);
 
 /** Renders a video source. */
 EXPORT void obs_source_video_render(obs_source_t *source);
+
+/** Returns the audio and video properties of the source if it is playing */
+EXPORT struct obs_source_av_props obs_source_get_av_props(obs_source_t *source);
 
 /** Gets the width of a source (if it has video) */
 EXPORT uint32_t obs_source_get_width(obs_source_t *source);

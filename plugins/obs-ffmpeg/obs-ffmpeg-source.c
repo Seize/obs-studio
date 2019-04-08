@@ -73,6 +73,7 @@ struct ffmpeg_source {
 	struct timespec last_a_print;
 	struct timespec last_v_print;
 	bool sent_playing;
+	struct obs_source_av_props av_props;
 };
 
 static bool is_local_file_modified(obs_properties_t *props,
@@ -209,6 +210,12 @@ static obs_properties_t *ffmpeg_source_getproperties(void *data)
 	return props;
 }
 
+struct obs_source_av_props ffmpeg_source_get_av_props(void *data)
+{
+	struct ffmpeg_source *s = data;
+	return s->av_props;
+}
+
 static uint32_t ffmpeg_source_getwidth(void *data)
 {
 	struct ffmpeg_source *s = data;
@@ -257,6 +264,9 @@ static void get_frame(void *opaque, struct obs_source_frame *f)
 	struct ffmpeg_source *s = opaque;
 	pthread_mutex_lock(&s->mutex);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
+	s->av_props.width = f->width;
+	s->av_props.height = f->height;
+	s->av_props.v_format = f->format;
 	pthread_mutex_unlock(&s->mutex);
 	PRINT_DEBUG("get_frame. %d x %d", f->width, f->height);
 	obs_source_output_video(s->source, f);
@@ -267,6 +277,9 @@ static void preload_frame(void *opaque, struct obs_source_frame *f)
 	struct ffmpeg_source *s = opaque;
 	pthread_mutex_lock(&s->mutex);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
+	s->av_props.width = f->width;
+	s->av_props.height = f->height;
+	s->av_props.v_format = f->format;
 	pthread_mutex_unlock(&s->mutex);
 	PRINT_DEBUG("preload_frame");
 	if (s->close_when_inactive)
@@ -281,6 +294,9 @@ static void get_audio(void *opaque, struct obs_source_audio *a)
 	struct ffmpeg_source *s = opaque;
 	pthread_mutex_lock(&s->mutex);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a);
+	s->av_props.speakers = a->speakers;
+	s->av_props.a_format = a->format;
+	s->av_props.samples_per_sec = a->samples_per_sec;
 	pthread_mutex_unlock(&s->mutex);
 	PRINT_DEBUG("get_audio");
 	obs_source_output_audio(s->source, a);
@@ -363,6 +379,8 @@ static void ffmpeg_source_tick(void *data, float seconds)
 	if(s->media.has_audio) {
 		audio_timeout = check_stream_timeout("audio", curr_time, s->last_a, &s->last_a_print);
 	}
+	s->av_props.v_valid = !video_timeout;
+	s->av_props.a_valid = !audio_timeout;
 	pthread_mutex_unlock(&s->mutex);
 
 	if(!s->sent_playing && !audio_timeout && !video_timeout) {
@@ -552,6 +570,8 @@ static void *ffmpeg_source_create(obs_data_t *settings, obs_source_t *source)
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v_print);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a_print);
 	s->sent_playing = false;
+	s->av_props.a_valid = false;
+	s->av_props.v_valid = false;
 
 	ffmpeg_source_update(s, settings);
 	return s;
@@ -610,6 +630,7 @@ struct obs_source_info ffmpeg_source = {
 	.destroy        = ffmpeg_source_destroy,
 	.get_defaults   = ffmpeg_source_defaults,
 	.get_properties = ffmpeg_source_getproperties,
+	.get_av_props   = ffmpeg_source_get_av_props,
 	.get_width      = ffmpeg_source_getwidth,
 	.get_height     = ffmpeg_source_getheight,
 	.activate       = ffmpeg_source_activate,

@@ -1844,6 +1844,18 @@ void obs_source_video_render(obs_source_t *source)
 	obs_source_release(source);
 }
 
+struct obs_source_av_props obs_source_get_av_props(obs_source_t *source) {
+	struct obs_source_av_props dummy;
+	dummy.a_valid = false;
+	dummy.v_valid = false;
+
+	if (source->context.data && source->info.get_av_props && source->enabled) {
+		return source->info.get_av_props(source->context.data);
+	}
+
+	return dummy;
+}
+
 static uint32_t get_base_width(const obs_source_t *source)
 {
 	bool is_filter = !!source->filter_parent;
