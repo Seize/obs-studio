@@ -223,7 +223,6 @@ static bool mp_media_init_hw_scaling(mp_media_t *m) {
 	int ret = 0;
 	AVRational time_base;
 	int video_stream_index;
-	AVBufferSrcParameters param;
 
 	enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_NV12, AV_PIX_FMT_NONE };
 	char pix_fmt_str[] = "nv12";
@@ -260,17 +259,17 @@ static bool mp_media_init_hw_scaling(mp_media_t *m) {
 		return -1;
 	}
 
-	param.format = m->v.decoder->pix_fmt;
-	param.time_base = time_base;
-	param.width = m->v.decoder->width;
-	param.height = m->v.decoder->height;
-	param.sample_aspect_ratio = m->v.decoder->sample_aspect_ratio;
+	m->hwscale.param.format = m->v.decoder->pix_fmt;
+	m->hwscale.param.time_base = time_base;
+	m->hwscale.param.width = m->v.decoder->width;
+	m->hwscale.param.height = m->v.decoder->height;
+	m->hwscale.param.sample_aspect_ratio = m->v.decoder->sample_aspect_ratio;
 	// TODO frame_rate: set to a non-zero value if input stream has a known constant framerate
-	param.frame_rate.den = 0;
-	param.frame_rate.num = 0;
-	param.hw_frames_ctx = av_buffer_ref(m->v.decoder->hw_frames_ctx);
+	m->hwscale.param.frame_rate.den = 0;
+	m->hwscale.param.frame_rate.num = 0;
+	m->hwscale.param.hw_frames_ctx = av_buffer_ref(m->v.decoder->hw_frames_ctx);
 
-	ret = av_buffersrc_parameters_set(m->hwscale.buffersrc_ctx, &param);
+	ret = av_buffersrc_parameters_set(m->hwscale.buffersrc_ctx, &m->hwscale.param);
 	if(ret != 0) {
 		PRINT_DEBUG("av_buffersrc_parameters_set failed");
 		return -1;
@@ -905,7 +904,6 @@ bool mp_media_init(mp_media_t *media, const struct mp_media_info *info)
 	media->is_local_file = info->is_local_file;
 	// Hwscale
 	memset(&media->hwscale, 0, sizeof(media->hwscale));
-	media->hwscale.hw_pix_fmt = AV_PIX_FMT_NONE;
 
 	if (!info->is_local_file || media->speed < 1 || media->speed > 200)
 		media->speed = 100;
@@ -949,6 +947,16 @@ void mp_media_free(mp_media_t *media)
 
 	mp_media_stop(media);
 	mp_kill_thread(media);
+
+	if(media->hwscale.init) {
+		av_buffer_unref(media->hwscale.param.hw_frames_ctx);
+		avfilter_free(media->hwscale.buffersrc_ctx);
+		avfilter_free(media->hwscale.hwdownload_ctx);
+		avfilter_free(media->hwscale.vformat_ctx);
+		avfilter_free(media->hwscale.buffersink_ctx);
+		avfilter_graph_free(&media->hwscale.filter_graph);
+		av_frame_free(&media->hwscale.filt_frame);
+	}
 	mp_decode_free(&media->v);
 	mp_decode_free(&media->a);
 	avformat_close_input(&media->fmt);

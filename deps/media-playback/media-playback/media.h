@@ -46,11 +46,9 @@ typedef void (*mp_stop_cb)(void *opaque);
 
 struct HwsContext {
 	bool init;
-	// HW device
-	AVBufferRef *hw_device_ctx;
-	enum AVPixelFormat hw_pix_fmt;
 	enum AVHWDeviceType hw_device_type;
 	// Filter graph
+	AVBufferSrcParameters param;
 	AVFilterContext *buffersrc_ctx;
 	AVFilterContext *hwdownload_ctx;
 	AVFilterContext *vformat_ctx;

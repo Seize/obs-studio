@@ -164,10 +164,9 @@ static AVCodec *find_hardware_decoder(struct mp_decode* d, AVStream* stream)
 			//if(d->m->hwscale.hw_device_type == AV_HWDEVICE_TYPE_NONE)
 			{
 				d->m->hwscale.hw_device_type = type;
-				d->m->hwscale.hw_pix_fmt = config->pix_fmt;
 				break;
 			}
-			PRINT_DEBUG("found codec hw config with type: %d, and pix_fmt: %d", d->m->hwscale.hw_device_type, d->m->hwscale.hw_pix_fmt);
+			PRINT_DEBUG("found codec hw config with type: %d, and pix_fmt: %d", d->m->hwscale.hw_device_type, config->pix_fmt);
 		}
 	}
 
@@ -202,12 +201,11 @@ static int mp_open_codec(struct mp_decode *d)
 		c->thread_count = 0;
 
 	if(d->m->hwscale.hw_device_type != AV_HWDEVICE_TYPE_NONE) {
-		ret = av_hwdevice_ctx_create(&d->m->hwscale.hw_device_ctx, d->m->hwscale.hw_device_type, NULL, NULL, 0);
+		ret = av_hwdevice_ctx_create(&c->hw_device_ctx, d->m->hwscale.hw_device_type, NULL, NULL, 0);
 		if(ret < 0) {
 			PRINT_DEBUG("av_hwdevice_ctx_create failed");
 			goto fail;
 		}
-		c->hw_device_ctx = av_buffer_ref(d->m->hwscale.hw_device_ctx);
 		c->get_format = get_hw_format;
 	}
 
