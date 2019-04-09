@@ -265,7 +265,9 @@ static bool mp_media_init_hw_scaling(mp_media_t *m) {
 	param.width = m->v.decoder->width;
 	param.height = m->v.decoder->height;
 	param.sample_aspect_ratio = m->v.decoder->sample_aspect_ratio;
-	// param.frame_rate = ; // TODO set to a non-zero value if input stream has a known constant framerate
+	// TODO frame_rate: set to a non-zero value if input stream has a known constant framerate
+	param.frame_rate.den = 0;
+	param.frame_rate.num = 0;
 	param.hw_frames_ctx = av_buffer_ref(m->v.decoder->hw_frames_ctx);
 
 	ret = av_buffersrc_parameters_set(m->hwscale.buffersrc_ctx, &param);

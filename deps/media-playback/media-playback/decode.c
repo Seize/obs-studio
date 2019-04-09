@@ -115,7 +115,7 @@ static AVCodec *find_hardware_decoder(struct mp_decode* d, AVStream* stream)
 	while((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE && i<nb_supported_device_types) {
 		const char* name = av_hwdevice_get_type_name(type);
 		int length = strlen(name);
-		supported_types[i] = malloc(length);
+		supported_types[i] = malloc(length+1);
 		strcpy(supported_types[i], name);
 		i++;
 	}
