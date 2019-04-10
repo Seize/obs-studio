@@ -489,7 +489,6 @@ static void mp_media_next_video(mp_media_t *m, bool preload)
 		}
 
 	} else if (m->hwscale.init) {
-		f->hw_frames_ctx = av_buffer_ref(m->v.decoder->hw_frames_ctx);
 
 		// push the decoded frame into the filtergraph
 		if (av_buffersrc_add_frame_flags(m->hwscale.buffersrc_ctx, f, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
@@ -949,7 +948,7 @@ void mp_media_free(mp_media_t *media)
 	mp_kill_thread(media);
 
 	if(media->hwscale.init) {
-		av_buffer_unref(media->hwscale.param.hw_frames_ctx);
+		av_buffer_unref(&media->hwscale.param.hw_frames_ctx);
 		avfilter_free(media->hwscale.buffersrc_ctx);
 		avfilter_free(media->hwscale.hwdownload_ctx);
 		avfilter_free(media->hwscale.vformat_ctx);
@@ -963,8 +962,6 @@ void mp_media_free(mp_media_t *media)
 	pthread_mutex_destroy(&media->mutex);
 	os_sem_destroy(media->sem);
 	sws_freeContext(media->swscale);
-	avfilter_graph_free(&media->hwscale.filter_graph);
-	av_frame_unref(media->hwscale.filt_frame);
 	av_freep(&media->scale_pic[0]);
 	bfree(media->path);
 	bfree(media->format_name);
