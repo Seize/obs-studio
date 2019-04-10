@@ -317,9 +317,16 @@ void mp_decode_free(struct mp_decode *d)
 {
 	mp_decode_clear_packets(d);
 	circlebuf_free(&d->packets);
+	AVBufferRef *hw_frames_ctx = NULL;
 
 	if (d->decoder) {
 		avcodec_flush_buffers(d->decoder);
+		if(d->decoder->hw_frames_ctx) {
+			hw_frames_ctx = malloc(sizeof(AVBufferRef));
+			hw_frames_ctx->buffer = d->decoder->hw_frames_ctx->buffer;
+			hw_frames_ctx->data = d->decoder->hw_frames_ctx->data;
+			hw_frames_ctx->size = d->decoder->hw_frames_ctx->size;
+		}
 #if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(57, 40, 101)
 		avcodec_free_context(&d->decoder);
 #else
@@ -329,6 +336,22 @@ void mp_decode_free(struct mp_decode *d)
 	if (d->frame) {
 		av_frame_unref(d->frame);
 		av_free(d->frame);
+	}
+
+	// Force release the hw frames by unref-ing in a loop until the
+	// reference reaches 0, which triggers a the hw-specific free() call
+	// TODO this is hacky, the unref-ing should be done gracefully but I can't
+	// find the places where new references are taken and not released
+	if(hw_frames_ctx) {
+		AVBufferRef *hw_frames_ctx2 = NULL;
+		do {
+			hw_frames_ctx2 = malloc(sizeof(AVBufferRef));
+			hw_frames_ctx2->buffer = hw_frames_ctx->buffer;
+			hw_frames_ctx2->data = hw_frames_ctx->data;
+			hw_frames_ctx2->size = hw_frames_ctx->size;
+			av_buffer_unref(&hw_frames_ctx2);
+		} while(hw_frames_ctx->buffer && av_buffer_get_ref_count(hw_frames_ctx) > 0);
+		av_freep(&hw_frames_ctx);
 	}
 
 	memset(d, 0, sizeof(*d));
