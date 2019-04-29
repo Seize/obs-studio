@@ -57,6 +57,7 @@ static const char *source_signals[] = {
 	"void save(ptr source)",
 	"void load(ptr source)",
 	"void playing(ptr source)",
+	"void timeout(ptr source)",
 	"void activate(ptr source)",
 	"void deactivate(ptr source)",
 	"void show(ptr source)",
@@ -838,6 +839,15 @@ void obs_source_playing(obs_source_t *source)
 	}
 
 	obs_source_dosignal(source, NULL, "playing");
+}
+
+void obs_source_timeout(obs_source_t *source)
+{
+	if (!obs_source_valid(source, "obs_source_timeout")) {
+		return;
+	}
+
+	obs_source_dosignal(source, NULL, "timeout");
 }
 
 void obs_source_send_mouse_click(obs_source_t *source,

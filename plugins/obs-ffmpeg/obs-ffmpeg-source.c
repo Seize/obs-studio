@@ -23,6 +23,9 @@
 
 #include <media-playback/media.h>
 
+#define PLAYING_SIGNAL_PERIOD (10 * 1000000) // 10s
+#define TIMEOUT_SIGNAL_PERIOD (2 * 1000000)  // 2s
+
 #define FF_LOG(level, format, ...) \
 	blog(level, "[Media Source]: " format, ##__VA_ARGS__)
 #define FF_LOG_S(source, level, format, ...) \
@@ -72,7 +75,8 @@ struct ffmpeg_source {
 	struct timespec last_v;
 	struct timespec last_a_print;
 	struct timespec last_v_print;
-	bool sent_playing;
+	struct timespec last_playing_signal;
+	struct timespec last_timeout_signal;
 	struct obs_source_av_props av_props;
 };
 
@@ -369,6 +373,7 @@ static void ffmpeg_source_tick(void *data, float seconds)
 	struct timespec curr_time;
 	bool audio_timeout = true;
 	bool video_timeout = true;
+	uint64_t delta_us;
 
 	clock_gettime(CLOCK_MONOTONIC_RAW, &curr_time);
 
@@ -383,9 +388,20 @@ static void ffmpeg_source_tick(void *data, float seconds)
 	s->av_props.a_valid = !audio_timeout;
 	pthread_mutex_unlock(&s->mutex);
 
-	if(!s->sent_playing && !audio_timeout && !video_timeout) {
+	// Sent 'playing' signal every 10s
+	delta_us = (curr_time.tv_sec - s->last_playing_signal.tv_sec) * 1000000 + (curr_time.tv_nsec - s->last_playing_signal.tv_nsec) / 1000;
+	if(!audio_timeout && !video_timeout && delta_us > PLAYING_SIGNAL_PERIOD) {
 		obs_source_playing(s->source);
-		s->sent_playing = true;
+		s->last_playing_signal.tv_sec = curr_time.tv_sec;
+		s->last_playing_signal.tv_nsec = curr_time.tv_nsec;
+	}
+
+	// Sent 'timeout' signals after at least 2s
+	delta_us = (curr_time.tv_sec - s->last_timeout_signal.tv_sec) * 1000000 + (curr_time.tv_nsec - s->last_timeout_signal.tv_nsec) / 1000;
+	if((audio_timeout || video_timeout) && delta_us > TIMEOUT_SIGNAL_PERIOD) {
+		obs_source_timeout(s->source);
+		s->last_timeout_signal.tv_sec = curr_time.tv_sec;
+		s->last_timeout_signal.tv_nsec = curr_time.tv_nsec;
 	}
 
 	if (s->destroy_media) {
@@ -569,7 +585,8 @@ static void *ffmpeg_source_create(obs_data_t *settings, obs_source_t *source)
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v_print);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a_print);
-	s->sent_playing = false;
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_playing_signal);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_timeout_signal);
 	s->av_props.a_valid = false;
 	s->av_props.v_valid = false;
 
