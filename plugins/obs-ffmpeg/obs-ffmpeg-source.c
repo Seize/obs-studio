@@ -23,8 +23,7 @@
 
 #include <media-playback/media.h>
 
-#define PLAYING_SIGNAL_PERIOD (10 * 1000000) // 10s
-#define TIMEOUT_SIGNAL_PERIOD (2 * 1000000)  // 2s
+#define STREAMS_INIT_DELAY_SEC 3
 
 #define FF_LOG(level, format, ...) \
 	blog(level, "[Media Source]: " format, ##__VA_ARGS__)
@@ -71,13 +70,12 @@ struct ffmpeg_source {
 	bool seekable;
 
 	pthread_mutex_t mutex;
-	struct timespec last_a;
-	struct timespec last_v;
-	struct timespec last_a_print;
-	struct timespec last_v_print;
-	struct timespec last_playing_signal;
-	struct timespec last_timeout_signal;
 	struct obs_source_av_props av_props;
+	struct timespec init_time;
+	struct timespec last_a_check;
+	struct timespec last_v_check;
+	unsigned int nb_af_interval;
+	unsigned int nb_vf_interval;
 };
 
 static bool is_local_file_modified(obs_properties_t *props,
@@ -267,10 +265,10 @@ static void get_frame(void *opaque, struct obs_source_frame *f)
 {
 	struct ffmpeg_source *s = opaque;
 	pthread_mutex_lock(&s->mutex);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
 	s->av_props.width = f->width;
 	s->av_props.height = f->height;
 	s->av_props.v_format = f->format;
+	s->nb_vf_interval++;
 	pthread_mutex_unlock(&s->mutex);
 	PRINT_DEBUG("get_frame. %d x %d", f->width, f->height);
 	obs_source_output_video(s->source, f);
@@ -280,10 +278,10 @@ static void preload_frame(void *opaque, struct obs_source_frame *f)
 {
 	struct ffmpeg_source *s = opaque;
 	pthread_mutex_lock(&s->mutex);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
 	s->av_props.width = f->width;
 	s->av_props.height = f->height;
 	s->av_props.v_format = f->format;
+	s->nb_vf_interval++;
 	pthread_mutex_unlock(&s->mutex);
 	PRINT_DEBUG("preload_frame");
 	if (s->close_when_inactive)
@@ -297,10 +295,10 @@ static void get_audio(void *opaque, struct obs_source_audio *a)
 {
 	struct ffmpeg_source *s = opaque;
 	pthread_mutex_lock(&s->mutex);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a);
 	s->av_props.speakers = a->speakers;
 	s->av_props.a_format = a->format;
 	s->av_props.samples_per_sec = a->samples_per_sec;
+	s->nb_af_interval++;
 	pthread_mutex_unlock(&s->mutex);
 	PRINT_DEBUG("get_audio");
 	obs_source_output_audio(s->source, a);
@@ -340,69 +338,83 @@ static void ffmpeg_source_open(struct ffmpeg_source *s)
 	}
 }
 
-static bool check_stream_timeout(char* stream_name, struct timespec curr_time, struct timespec last, struct timespec* last_print)
+static bool update_stream_state(struct ffmpeg_source *s, bool is_audio, struct timespec curr_time)
 {
-	uint64_t delta_us;
-	uint64_t delta_us_print;
-	bool timeout = false;
+	enum obs_stream_state new_state = OBS_STREAM_ALIVE;
+	bool changed = false;
 
-	delta_us = (curr_time.tv_sec - last.tv_sec) * 1000000 + (curr_time.tv_nsec - last.tv_nsec) / 1000;
-	if(delta_us > 1000000) {
-		timeout = true;
+	bool present					= is_audio ? s->media.has_audio : s->media.has_video;
+	struct timespec* last_check		= is_audio ? &s->last_a_check : &s->last_v_check;
+	enum obs_stream_state* state	= is_audio ? &s->av_props.a_state : &s->av_props.v_state;
+	unsigned int* nb_frames			= is_audio ? &s->nb_af_interval : &s->nb_vf_interval;
+
+	// Wait a second between each check for timeout
+	if(curr_time.tv_sec - last_check->tv_sec < 1) {
+		return false;
 	}
 
-	delta_us_print = (last.tv_sec - last_print->tv_sec) * 1000000 + (last.tv_nsec - last_print->tv_nsec) / 1000;
-	if(delta_us_print > 1000000) {
-		if(timeout) {
-			PRINT_DEBUG("%s stream timeout", stream_name);
-		} else {
-			PRINT_DEBUG("%s stream alive", stream_name);
-		}
-
-		last_print->tv_sec = last.tv_sec;
-		last_print->tv_nsec = last.tv_nsec;
+	// If there are no new frames in the last second, there is a timeout or no stream
+	if(*nb_frames == 0) {
+		new_state = present ? OBS_STREAM_TIMEOUT : OBS_STREAM_ABSENT;
 	}
 
-	return timeout;
+	// Check if the state changed
+	if(*state != new_state) {
+		*state = new_state;
+		changed = true;
+	}
+
+	*nb_frames = 0;
+	last_check->tv_sec = curr_time.tv_sec;
+	last_check->tv_nsec = curr_time.tv_nsec;
+
+	return changed;
 }
+
+static void check_timeout(struct ffmpeg_source *s)
+{
+	struct timespec curr_time;
+	bool audio_state_changed = false;
+	bool video_state_changed = false;
+
+	clock_gettime(CLOCK_MONOTONIC_RAW, &curr_time);
+
+	// Wait for some time before sending any signal
+	if(curr_time.tv_sec - s->init_time.tv_sec < STREAMS_INIT_DELAY_SEC) {
+		return;
+	}
+
+	pthread_mutex_lock(&s->mutex);
+	audio_state_changed = update_stream_state(s, true, curr_time);
+	video_state_changed = update_stream_state(s, false, curr_time);
+	pthread_mutex_unlock(&s->mutex);
+
+	// After STREAMS_INIT_DELAY_SEC, consider Idle streams as timeout
+	if(s->av_props.a_state == OBS_STREAM_IDLE) {
+		s->av_props.a_state = OBS_STREAM_TIMEOUT;
+	}
+	if(s->av_props.v_state == OBS_STREAM_IDLE) {
+		s->av_props.v_state = OBS_STREAM_TIMEOUT;
+	}
+
+	if(audio_state_changed || video_state_changed) {
+		if(s->av_props.a_state == OBS_STREAM_TIMEOUT || s->av_props.v_state == OBS_STREAM_TIMEOUT ||
+			(s->av_props.a_state == OBS_STREAM_ABSENT && s->av_props.v_state == OBS_STREAM_ABSENT)) {
+			// If a stream is timeout or both streams are absent, send the Timeout signal
+			obs_source_timeout(s->source);
+		} else if(s->av_props.a_state == OBS_STREAM_ALIVE && s->av_props.v_state == OBS_STREAM_ALIVE) {
+			// If both streams are playing, send the Playing signal
+			obs_source_playing(s->source);
+		}
+	}
+}
+
 
 static void ffmpeg_source_tick(void *data, float seconds)
 {
 	UNUSED_PARAMETER(seconds);
 	struct ffmpeg_source *s = data;
-	struct timespec curr_time;
-	bool audio_timeout = true;
-	bool video_timeout = true;
-	uint64_t delta_us;
-
-	clock_gettime(CLOCK_MONOTONIC_RAW, &curr_time);
-
-	pthread_mutex_lock(&s->mutex);
-	if(s->media.has_video) {
-		video_timeout = check_stream_timeout("video", curr_time, s->last_v, &s->last_v_print);
-	}
-	if(s->media.has_audio) {
-		audio_timeout = check_stream_timeout("audio", curr_time, s->last_a, &s->last_a_print);
-	}
-	s->av_props.v_valid = !video_timeout;
-	s->av_props.a_valid = !audio_timeout;
-	pthread_mutex_unlock(&s->mutex);
-
-	// Sent 'playing' signal every 10s
-	delta_us = (curr_time.tv_sec - s->last_playing_signal.tv_sec) * 1000000 + (curr_time.tv_nsec - s->last_playing_signal.tv_nsec) / 1000;
-	if(!audio_timeout && !video_timeout && delta_us > PLAYING_SIGNAL_PERIOD) {
-		obs_source_playing(s->source);
-		s->last_playing_signal.tv_sec = curr_time.tv_sec;
-		s->last_playing_signal.tv_nsec = curr_time.tv_nsec;
-	}
-
-	// Sent 'timeout' signals after at least 2s
-	delta_us = (curr_time.tv_sec - s->last_timeout_signal.tv_sec) * 1000000 + (curr_time.tv_nsec - s->last_timeout_signal.tv_nsec) / 1000;
-	if((audio_timeout || video_timeout) && delta_us > TIMEOUT_SIGNAL_PERIOD) {
-		obs_source_timeout(s->source);
-		s->last_timeout_signal.tv_sec = curr_time.tv_sec;
-		s->last_timeout_signal.tv_nsec = curr_time.tv_nsec;
-	}
+	check_timeout(s);
 
 	if (s->destroy_media) {
 		if (s->media_valid) {
@@ -484,6 +496,15 @@ static void ffmpeg_source_update(void *data, obs_data_t *settings)
 	bool active = obs_source_active(s->source);
 	if (!s->close_when_inactive || active)
 		ffmpeg_source_open(s);
+
+	// Reset timeout counters
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->init_time);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v_check);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a_check);
+	s->av_props.a_state = OBS_STREAM_IDLE;
+	s->av_props.v_state = OBS_STREAM_IDLE;
+	s->nb_af_interval = 0;
+	s->nb_vf_interval = 0;
 
 	dump_source_info(s, input, input_format);
 	if (!s->restart_on_activate || active)
@@ -581,14 +602,6 @@ static void *ffmpeg_source_create(obs_data_t *settings, obs_source_t *source)
 	proc_handler_add(ph, "void get_nb_frames(out int num_frames)",
 			get_nb_frames, s);
 	pthread_mutex_init_value(&s->mutex);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_v_print);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_a_print);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_playing_signal);
-	clock_gettime(CLOCK_MONOTONIC_RAW, &s->last_timeout_signal);
-	s->av_props.a_valid = false;
-	s->av_props.v_valid = false;
 
 	ffmpeg_source_update(s, settings);
 	return s;

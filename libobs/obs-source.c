@@ -1856,8 +1856,8 @@ void obs_source_video_render(obs_source_t *source)
 
 struct obs_source_av_props obs_source_get_av_props(obs_source_t *source) {
 	struct obs_source_av_props dummy;
-	dummy.a_valid = false;
-	dummy.v_valid = false;
+	dummy.a_state = OBS_STREAM_IDLE;
+	dummy.v_state = OBS_STREAM_IDLE;
 
 	if (source->context.data && source->info.get_av_props && source->enabled) {
 		return source->info.get_av_props(source->context.data);

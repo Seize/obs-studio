@@ -120,6 +120,13 @@ enum obs_scale_type {
 	OBS_SCALE_AREA,
 };
 
+enum obs_stream_state {
+	OBS_STREAM_IDLE,
+	OBS_STREAM_ABSENT,
+	OBS_STREAM_ALIVE,
+	OBS_STREAM_TIMEOUT,
+};
+
 /**
  * Used with scene items to indicate the type of bounds to use for scene items.
  * Mostly determines how the image will be scaled within those bounds, or
@@ -250,14 +257,14 @@ struct obs_cmdline_args {
  * Source audio and video input properties structure. Used with
  * obs_source_get_av_props to give information when the source is playing. */
 struct obs_source_av_props {
-	bool                a_valid;
-	bool                v_valid;
-	uint32_t            width;
-	uint32_t            height;
-	enum video_format   v_format;
-	enum speaker_layout speakers;
-	enum audio_format   a_format;
-	uint32_t            samples_per_sec;
+	enum obs_stream_state a_state;
+	enum obs_stream_state v_state;
+	uint32_t              width;
+	uint32_t              height;
+	enum video_format     v_format;
+	enum speaker_layout   speakers;
+	enum audio_format     a_format;
+	uint32_t              samples_per_sec;
 };
 
 /* ------------------------------------------------------------------------- */
