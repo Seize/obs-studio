@@ -181,12 +181,14 @@ int OutputStart(output_t* o, int idx, queue_t* queue, struct rtmp_server_handler
 	return 0;
 }
 
-int OutputStop(output_t* o) {
-	int ret;
-
+int OutputStopClient(output_t* o) {
+	// Stop the client thread, which will stop the other threads with OutputStop
 	o->quitReadClientThread = true;
 	thread_destroy(o->threadReadClient);
+}
 
+int OutputStop(output_t* o) {
+	int ret;
 	socket_close(o->client_socket);
 	QueueReaderDestroy(o->queue_reader);
 	rtmp_server_destroy(o->s_rtmp);
@@ -199,6 +201,7 @@ int OutputStop(output_t* o) {
 
 int STDCALL OutputReadClientThread(void* param) {
 	int ret, bytes;
+	bool quit = false;
 	unsigned char* packet;
 	pthread_t threadSendPkt;
 
@@ -212,16 +215,50 @@ int STDCALL OutputReadClientThread(void* param) {
 
 	packet = malloc(2 * 1024 * 1024);
 
-	pthread_mutex_lock(&o->mutex);
-	do {
-		pthread_mutex_unlock(&o->mutex);
-		bytes = socket_recv(o->client_socket, packet, sizeof(packet), 0);
+	while(!quit) {
+		int rv;
+		struct timeval timeout = { 1, 0 }; // 1 second timeout
+		fd_set set;
 
 		pthread_mutex_lock(&o->mutex);
-		if(bytes > 0) {
-			ret = rtmp_server_input(o->s_rtmp, packet, bytes);
+		quit = o->quitReadClientThread;
+		pthread_mutex_unlock(&o->mutex);
+
+		if(quit) {
+			break;
 		}
-	} while (!o->quitReadClientThread && bytes > 0 && ret == 0);
+
+		FD_ZERO(&set);
+		FD_SET(o->client_socket, &set);
+		rv = select(o->client_socket + 1, &set, NULL, NULL, &timeout);
+		if(rv == -1) {
+			perror("OutputReadClientThread: error in select");
+			break;
+		}
+		else if(rv == 0) {
+			// a timeout occured, retry
+			continue;
+		}
+		else {
+			bytes = socket_recv(o->client_socket, packet, sizeof(packet), 0);
+
+			if(bytes <= 0) {
+				rserror("error during socket_recv, bytes=%d", bytes);
+				break;
+			}
+
+			pthread_mutex_lock(&o->mutex);
+			ret = rtmp_server_input(o->s_rtmp, packet, bytes);
+			pthread_mutex_unlock(&o->mutex);
+
+			if(ret != 0) {
+				rserror("error during rtmp_server_input, ret=%d", ret);
+				break;
+			}
+		}
+	}
+
+	pthread_mutex_lock(&o->mutex);
 	o->quitSendPktThread = true;
 	pthread_mutex_unlock(&o->mutex);
 
@@ -242,9 +279,14 @@ int STDCALL OutputSendPktThread(void* param) {
 		return 1;
 	}
 
-	pthread_mutex_lock(&o->mutex);
 	while (!quit) {
+		pthread_mutex_lock(&o->mutex);
+		quit = o->quitSendPktThread;
 		pthread_mutex_unlock(&o->mutex);
+
+		if(quit) {
+			break;
+		}
 
 		queue_buf_t* buf = QueueReaderRead(o->queue_reader);
 		if(buf == NULL) {
@@ -253,23 +295,23 @@ int STDCALL OutputSendPktThread(void* param) {
 		}
 
 		pthread_mutex_lock(&o->mutex);
-		quit = o->quitSendPktThread;
-		if(!quit) {
-			if (FLV_TYPE_AUDIO == buf->type) {
-				ret = flv_muxer_aac(o->muxer,  buf->data, buf->size, buf->pts, buf->dts);
-			} else if (FLV_TYPE_VIDEO == buf->type) {
-				ret = flv_muxer_avc(o->muxer, buf->data, buf->size, buf->pts, buf->dts);
-			} else {
-				rserror("unknown type of buffer ! buf=%p, type=%d, size=%zu, dts=%ld", buf->data, buf->type, buf->size, buf->dts);
-			}
-
-			if(ret != 0) {
-				rserror("error while muxing pkt, ret=%d", ret);
-			}
+		if (FLV_TYPE_AUDIO == buf->type) {
+			ret = flv_muxer_aac(o->muxer,  buf->data, buf->size, buf->pts, buf->dts);
+		} else if (FLV_TYPE_VIDEO == buf->type) {
+			ret = flv_muxer_avc(o->muxer, buf->data, buf->size, buf->pts, buf->dts);
+		} else {
+			rserror("unknown type of buffer ! buf=%p, type=%d, size=%zu, dts=%ld", buf->data, buf->type, buf->size, buf->dts);
 		}
+
+		if(ret != 0) {
+			rserror("error while muxing pkt, ret=%d", ret);
+		}
+
 		free(buf->data);
 		free(buf);
+		pthread_mutex_unlock(&o->mutex);
 	}
+	pthread_mutex_lock(&o->mutex);
 	o->quitSendPktThread = false;
 	pthread_mutex_unlock(&o->mutex);
 	return 0;
@@ -366,9 +408,9 @@ int ServerStop(server_t* s) {
 
 	for(int i=0; i<NB_OUTPUTS; i++) {
 		if(s->outputs[i].init) {
-			ret = OutputStop(&s->outputs[i]);
+			ret = OutputStopClient(&s->outputs[i]);
 			if(ret != 0) {
-				rserror("OutputStop failed, ret=%d", ret);
+				rserror("OutputStopClient failed, ret=%d", ret);
 				continue;
 			}
 			s->outputs[i].init = false;

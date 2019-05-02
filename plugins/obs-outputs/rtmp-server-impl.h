@@ -87,6 +87,7 @@ typedef struct output {
 } output_t;
 
 int OutputStart(output_t* o, int idx, queue_t* queue, struct rtmp_server_handler_t* base_handler, socket_t socket);
+int OutputStopClient(output_t* o);
 int OutputStop(output_t* o);
 
 int STDCALL OutputReadClientThread(void* param);
